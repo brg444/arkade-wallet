@@ -1,306 +1,330 @@
 diff --git a/dist/chunk-47Z4LEIW.js b/dist/chunk-47Z4LEIW.js
-index 2a32d2ef301558ff785cd88ec1a2687119f88be3..1e3569047ee9b0f58c111976cd8ccd0fd8de46ff 100644
+index 2a32d2ef301558ff785cd88ec1a2687119f88be3..6393d42878995dbb2e6cf4795f310ddfe9ae5ecb 100644
 --- a/dist/chunk-47Z4LEIW.js
 +++ b/dist/chunk-47Z4LEIW.js
-@@ -486,8 +486,8 @@ async function detectUsedScripts(indexerProvider, scriptHexes) {
+@@ -486,8 +486,13 @@ async function detectUsedScripts(indexerProvider, scriptHexes) {
        for (const vtxo of vtxos) {
          if (remaining.delete(vtxo.script)) used.add(vtxo.script);
        }
 -      hasMore = page ? vtxos.length === DEFAULT_PAGE_SIZE : false;
 -      pageIndex++;
-+      hasMore = page !== void 0 && page !== null && page.current < page.total && page.next > pageIndex && vtxos.length > 0;
-+      if (page) pageIndex = page.next;
++      hasMore = page !== void 0 && page !== null && page.current < page.total;
++      if (hasMore) {
++        if (vtxos.length === 0 || page.next <= pageIndex) {
++          throw new Error(`Indexer paging contradicts itself: page ${page.current} of ${page.total} ${vtxos.length === 0 ? "is empty" : `points to ${page.next} after ${pageIndex}`}`);
++        }
++        pageIndex = page.next;
++      }
      }
    }
    return used;
 diff --git a/dist/chunk-C7NY6WSA.js b/dist/chunk-C7NY6WSA.js
-index 757897da44c7df0201e453568e275b87c91ac9a2..4dff3c551f47ec9077a5a19a438839f7177c9776 100644
+index 757897da44c7df0201e453568e275b87c91ac9a2..21886d6e0fda9ec19e97b97a2d7938b35f35d220 100644
 --- a/dist/chunk-C7NY6WSA.js
 +++ b/dist/chunk-C7NY6WSA.js
-@@ -1603,7 +1603,7 @@ var RestIndexerProvider = class {
+@@ -1603,8 +1603,9 @@ var RestIndexerProvider = class {
            pageSize: DEFAULT_VTXO_PAGE_SIZE
          });
          all.push(...vtxos);
 -        if (!page || page.current >= page.total || vtxos.length < DEFAULT_VTXO_PAGE_SIZE) {
-+        if (!page || page.current >= page.total || page.next <= pageIndex || vtxos.length === 0) {
-           break;
+-          break;
++        if (!page || page.current >= page.total) break;
++        if (vtxos.length === 0 || page.next <= pageIndex) {
++          throw new Error(`Indexer paging contradicts itself: page ${page.current} of ${page.total} ${vtxos.length === 0 ? "is empty" : `points to ${page.next} after ${pageIndex}`}`);
          }
          pageIndex = page.next;
+       }
 diff --git a/dist/chunk-HKEPJBTY.cjs b/dist/chunk-HKEPJBTY.cjs
-index 6164d3ff2f7d63ed87448f3f14974671fb7b56c1..15094856a819a9196ca3dcadafdd4461b3ec54dc 100644
+index 6164d3ff2f7d63ed87448f3f14974671fb7b56c1..03f220ca61088dce3e526b2a01b707c8f920b244 100644
 --- a/dist/chunk-HKEPJBTY.cjs
 +++ b/dist/chunk-HKEPJBTY.cjs
-@@ -1605,7 +1605,7 @@ var RestIndexerProvider = class {
+@@ -1605,8 +1605,9 @@ var RestIndexerProvider = class {
            pageSize: DEFAULT_VTXO_PAGE_SIZE
          });
          all.push(...vtxos);
 -        if (!page || page.current >= page.total || vtxos.length < DEFAULT_VTXO_PAGE_SIZE) {
-+        if (!page || page.current >= page.total || page.next <= pageIndex || vtxos.length === 0) {
-           break;
+-          break;
++        if (!page || page.current >= page.total) break;
++        if (vtxos.length === 0 || page.next <= pageIndex) {
++          throw new Error(`Indexer paging contradicts itself: page ${page.current} of ${page.total} ${vtxos.length === 0 ? "is empty" : `points to ${page.next} after ${pageIndex}`}`);
          }
          pageIndex = page.next;
+       }
 diff --git a/dist/chunk-LZAINCGU.cjs b/dist/chunk-LZAINCGU.cjs
-index e3b029b5fb509f9c08cbe9fa43d62dea588a39d4..7a0ea04a83491079e14679e708853df46c3d750d 100644
+index e3b029b5fb509f9c08cbe9fa43d62dea588a39d4..d9f50427050ea3bd9be9b201394c7e7a68dde094 100644
 --- a/dist/chunk-LZAINCGU.cjs
 +++ b/dist/chunk-LZAINCGU.cjs
-@@ -1754,20 +1754,28 @@ async function getAllNormalizedVtxos(provider, scripts, opts = {}) {
-     chunks.push(scripts.slice(i, i + SCRIPT_QUERY_CHUNK_SIZE));
-   }
+@@ -1756,8 +1756,7 @@ async function getAllNormalizedVtxos(provider, scripts, opts = {}) {
    const fetchChunk = async (chunk) => {
--    const result = [];
--    let pageIndex = 0;
+     const result = [];
+     let pageIndex = 0;
 -    let hasMore = true;
 -    while (hasMore) {
--      const { vtxos, page } = await getNormalizedVtxos(provider, {
--        ...filters,
--        scripts: chunk,
--        pageIndex,
--        pageSize
--      });
--      result.push(...vtxos);
++    for (; ; ) {
+       const { vtxos, page } = await getNormalizedVtxos(provider, {
+         ...filters,
+         scripts: chunk,
+@@ -1765,9 +1764,11 @@ async function getAllNormalizedVtxos(provider, scripts, opts = {}) {
+         pageSize
+       });
+       result.push(...vtxos);
 -      hasMore = page ? vtxos.length === pageSize : false;
 -      pageIndex++;
 -      if (hasMore) await new Promise((r) => setTimeout(r, 500));
-+    const readPage = (pageIndex) => getNormalizedVtxos(provider, { ...filters, scripts: chunk, pageIndex, pageSize });
-+    const first = await readPage(0);
-+    const result = [...first.vtxos];
-+    if (!first.page || first.page.current >= first.page.total || first.vtxos.length === 0) return result;
-+    let page = first.page;
-+    while (page.next === page.current + 1 && page.current < page.total) {
-+      const from = page.next;
-+      const to = Math.min(page.total, from + 4 - 1);
-+      const pages = await Promise.all(Array.from({ length: to - from + 1 }, (_, i) => readPage(from + i)));
-+      for (const answer of pages) result.push(...answer.vtxos);
-+      const last = pages[pages.length - 1];
-+      if (!last.page || pages.some((answer) => answer.vtxos.length === 0)) return result;
-+      if (last.page.current <= page.current) return result;
-+      page = last.page;
-+    }
-+    let asked = page.current;
-+    while (page.current < page.total && page.next > asked) {
-+      asked = page.next;
-+      const answer = await readPage(asked);
-+      result.push(...answer.vtxos);
-+      if (!answer.page || answer.vtxos.length === 0) break;
-+      page = answer.page;
++      if (!page || page.current >= page.total) break;
++      if (vtxos.length === 0 || page.next <= pageIndex) {
++        throw new Error(`Indexer paging contradicts itself: page ${page.current} of ${page.total} ${vtxos.length === 0 ? "is empty" : `points to ${page.next} after ${pageIndex}`}`);
++      }
++      pageIndex = page.next;
      }
      return result;
    };
 diff --git a/dist/chunk-NDQ4LB4X.cjs b/dist/chunk-NDQ4LB4X.cjs
-index f661daae36c471fdc9da7b919ee8fb90ad678df2..7d40c86e4f52306f351f6133b2e60e25fb1d8991 100644
+index f661daae36c471fdc9da7b919ee8fb90ad678df2..3010ad1a1089cebaf0fbe7a3e290b202050db889 100644
 --- a/dist/chunk-NDQ4LB4X.cjs
 +++ b/dist/chunk-NDQ4LB4X.cjs
-@@ -488,8 +488,8 @@ async function detectUsedScripts(indexerProvider, scriptHexes) {
+@@ -488,8 +488,13 @@ async function detectUsedScripts(indexerProvider, scriptHexes) {
        for (const vtxo of vtxos) {
          if (remaining.delete(vtxo.script)) used.add(vtxo.script);
        }
 -      hasMore = page ? vtxos.length === chunkLZAINCGU_cjs.DEFAULT_PAGE_SIZE : false;
 -      pageIndex++;
-+      hasMore = page !== void 0 && page !== null && page.current < page.total && page.next > pageIndex && vtxos.length > 0;
-+      if (page) pageIndex = page.next;
++      hasMore = page !== void 0 && page !== null && page.current < page.total;
++      if (hasMore) {
++        if (vtxos.length === 0 || page.next <= pageIndex) {
++          throw new Error(`Indexer paging contradicts itself: page ${page.current} of ${page.total} ${vtxos.length === 0 ? "is empty" : `points to ${page.next} after ${pageIndex}`}`);
++        }
++        pageIndex = page.next;
++      }
      }
    }
    return used;
 diff --git a/dist/chunk-QTMK34TP.js b/dist/chunk-QTMK34TP.js
-index 51c8d78dc9a93d9a6f62e803871874f97c6241df..fda4118527117325acd6c0a325dd32dacfc9afe4 100644
+index 51c8d78dc9a93d9a6f62e803871874f97c6241df..34e4ec038e0a7610087442fb6e8596e011857ecd 100644
 --- a/dist/chunk-QTMK34TP.js
 +++ b/dist/chunk-QTMK34TP.js
-@@ -1752,20 +1752,28 @@ async function getAllNormalizedVtxos(provider, scripts, opts = {}) {
-     chunks.push(scripts.slice(i, i + SCRIPT_QUERY_CHUNK_SIZE));
-   }
+@@ -1754,8 +1754,7 @@ async function getAllNormalizedVtxos(provider, scripts, opts = {}) {
    const fetchChunk = async (chunk) => {
--    const result = [];
--    let pageIndex = 0;
+     const result = [];
+     let pageIndex = 0;
 -    let hasMore = true;
 -    while (hasMore) {
--      const { vtxos, page } = await getNormalizedVtxos(provider, {
--        ...filters,
--        scripts: chunk,
--        pageIndex,
--        pageSize
--      });
--      result.push(...vtxos);
++    for (; ; ) {
+       const { vtxos, page } = await getNormalizedVtxos(provider, {
+         ...filters,
+         scripts: chunk,
+@@ -1763,9 +1762,11 @@ async function getAllNormalizedVtxos(provider, scripts, opts = {}) {
+         pageSize
+       });
+       result.push(...vtxos);
 -      hasMore = page ? vtxos.length === pageSize : false;
 -      pageIndex++;
 -      if (hasMore) await new Promise((r) => setTimeout(r, 500));
-+    const readPage = (pageIndex) => getNormalizedVtxos(provider, { ...filters, scripts: chunk, pageIndex, pageSize });
-+    const first = await readPage(0);
-+    const result = [...first.vtxos];
-+    if (!first.page || first.page.current >= first.page.total || first.vtxos.length === 0) return result;
-+    let page = first.page;
-+    while (page.next === page.current + 1 && page.current < page.total) {
-+      const from = page.next;
-+      const to = Math.min(page.total, from + 4 - 1);
-+      const pages = await Promise.all(Array.from({ length: to - from + 1 }, (_, i) => readPage(from + i)));
-+      for (const answer of pages) result.push(...answer.vtxos);
-+      const last = pages[pages.length - 1];
-+      if (!last.page || pages.some((answer) => answer.vtxos.length === 0)) return result;
-+      if (last.page.current <= page.current) return result;
-+      page = last.page;
-+    }
-+    let asked = page.current;
-+    while (page.current < page.total && page.next > asked) {
-+      asked = page.next;
-+      const answer = await readPage(asked);
-+      result.push(...answer.vtxos);
-+      if (!answer.page || answer.vtxos.length === 0) break;
-+      page = answer.page;
++      if (!page || page.current >= page.total) break;
++      if (vtxos.length === 0 || page.next <= pageIndex) {
++        throw new Error(`Indexer paging contradicts itself: page ${page.current} of ${page.total} ${vtxos.length === 0 ? "is empty" : `points to ${page.next} after ${pageIndex}`}`);
++      }
++      pageIndex = page.next;
      }
      return result;
    };
 diff --git a/dist/chunk-Y3CDDPWI.cjs b/dist/chunk-Y3CDDPWI.cjs
-index 4370998ea257617b3f3c513267d7805d602c296d..3562c61f4e8d4178836183ab7cbb6376adcba849 100644
+index 4370998ea257617b3f3c513267d7805d602c296d..c3f1b7339c91c48987f741e4a73d9354470e7a4e 100644
 --- a/dist/chunk-Y3CDDPWI.cjs
 +++ b/dist/chunk-Y3CDDPWI.cjs
-@@ -5733,14 +5733,15 @@ var VtxoManager = class _VtxoManager {
-    * {@link getExpiringVtxos} against a caller-supplied chain tip, so a settle pass's select,
-    * re-select and expiry sort share one tip instead of fetching (and disagreeing on) one each.
-    */
--  async selectExpiringVtxos(thresholdMs, now) {
-+  async selectExpiringVtxos(thresholdMs, now, maxSyncAgeMs) {
-     if (this.settlementConfig === false && thresholdMs === void 0) {
-       return [];
-     }
-     const threshold = thresholdMs !== void 0 ? thresholdMs : this.configuredThresholdMs();
-     const vtxosPromise = this.wallet.getSpendableVtxos({
-       withRecoverable: true,
--      genericallySpendableOnly: true
-+      genericallySpendableOnly: true,
-+      ...maxSyncAgeMs !== void 0 ? { maxSyncAgeMs } : {}
+@@ -6238,8 +6238,14 @@ var VtxoManager = class _VtxoManager {
+     const cm = await this.wallet.getContractManager();
+     const signerSet = signerSetFromInfo(info);
+     const nowSeconds = Math.floor(Date.now() / 1e3);
+-    const contractsWithVtxos = await cm.getContractsWithVtxos({
+-      type: ["default", "delegate"]
++    const type = ["default", "delegate"];
++    const affected = (await cm.getContracts({ type })).filter((contract) => {
++      const serverPubKey = contract.params.serverPubKey;
++      return !!serverPubKey && classifyAgainstSignerSet(serverPubKey, signerSet, nowSeconds).status !== "CURRENT";
++    });
++    const contractsWithVtxos = affected.length === 0 ? [] : await cm.getContractsWithVtxos({
++      type,
++      script: affected.map((contract) => contract.script)
      });
-     const tip = now ?? await fetchTimeHeight(this.wallet);
-     const vtxos = await vtxosPromise;
-@@ -6752,7 +6753,7 @@ var VtxoManager = class _VtxoManager {
-     if (!this.renewalInProgress) {
-       try {
-         now = await fetchTimeHeight(this.wallet);
--        expiringVtxos = await this.selectExpiringVtxos(void 0, now);
-+        expiringVtxos = await this.selectExpiringVtxos(void 0, now, 3e4);
-         expiringVtxos = await this.revalidateBeforeSettle(expiringVtxos, void 0, now);
-       } catch (e) {
-         console.error("Error fetching expiring VTXOs:", e);
-@@ -7474,17 +7475,20 @@ var IndexerExitDataSource = class {
+     const reportsBySigner = /* @__PURE__ */ new Map();
+     const migratable = [];
+@@ -7440,6 +7446,10 @@ async function captureExitBranch(params) {
+         psbtByTxid.set(chunkLZAINCGU_cjs.Transaction.fromPSBT(base.base64.decode(psbt)).id, psbt);
+       }
+     }
++    const missing = nonCommitment.filter((txid) => !psbtByTxid.has(txid));
++    if (missing.length > 0) {
++      throw new Error(`exit capture of ${vtxo.txid}:${vtxo.vout} is missing ${missing.length} of ${nonCommitment.length} virtual txs`);
++    }
+   }
+   const virtualTxs = ordered.map((c) => {
+     const expires = Number(c.expiresAt);
+@@ -7474,34 +7484,46 @@ var IndexerExitDataSource = class {
    indexer;
    name = "indexer";
    async getVtxoChain(vtxo) {
 -    const chain = [];
 -    let pageIndex = 0;
 -    let hasMore = true;
+-    while (hasMore) {
+-      const { chain: page, page: meta } = await this.indexer.getVtxoChain(
+-        { txid: vtxo.txid, vout: vtxo.vout },
+-        { pageIndex, pageSize: chunkLZAINCGU_cjs.DEFAULT_PAGE_SIZE }
 +    const outpoint = { txid: vtxo.txid, vout: vtxo.vout };
 +    const { chain: whole, page: first } = await this.indexer.getVtxoChain(outpoint);
 +    if (!first || first.current >= first.total) return whole;
 +    const chain = [...whole];
-+    let pageIndex = first.next;
-+    let hasMore = first.next > 0 && whole.length > 0;
-     while (hasMore) {
-       const { chain: page, page: meta } = await this.indexer.getVtxoChain(
--        { txid: vtxo.txid, vout: vtxo.vout },
++    let asked = 0;
++    let meta = first;
++    let received = whole.length;
++    for (; ; ) {
++      if (!meta || meta.current >= meta.total) break;
++      if (received === 0 || meta.next <= asked) {
++        throw new Error(`Indexer paging contradicts itself: page ${meta.current} of ${meta.total} ${received === 0 ? "is empty" : `points to ${meta.next} after ${asked}`}`);
++      }
++      asked = meta.next;
++      const answer = await this.indexer.getVtxoChain(
 +        outpoint,
-         { pageIndex, pageSize: chunkLZAINCGU_cjs.DEFAULT_PAGE_SIZE }
++        { pageIndex: asked, pageSize: chunkLZAINCGU_cjs.DEFAULT_PAGE_SIZE }
        );
-       chain.push(...page);
+-      chain.push(...page);
 -      hasMore = meta ? page.length === chunkLZAINCGU_cjs.DEFAULT_PAGE_SIZE : false;
 -      pageIndex++;
-+      hasMore = meta !== void 0 && meta !== null && meta.current < meta.total && meta.next > pageIndex && page.length > 0;
-+      if (meta) pageIndex = meta.next;
++      chain.push(...answer.chain);
++      meta = answer.page;
++      received = answer.chain.length;
      }
      return chain;
    }
-@@ -7500,8 +7504,8 @@ var IndexerExitDataSource = class {
-       for (const psbt of txs) {
-         out.set(chunkLZAINCGU_cjs.Transaction.fromPSBT(base.base64.decode(psbt)).id, psbt);
+   async getVirtualTxs(txids) {
+     const out = /* @__PURE__ */ new Map();
+-    let pageIndex = 0;
+-    let hasMore = true;
+-    while (hasMore) {
+-      const { txs, page } = await this.indexer.getVirtualTxs(txids, {
+-        pageIndex,
+-        pageSize: chunkLZAINCGU_cjs.DEFAULT_PAGE_SIZE
+-      });
+-      for (const psbt of txs) {
+-        out.set(chunkLZAINCGU_cjs.Transaction.fromPSBT(base.base64.decode(psbt)).id, psbt);
++    const wanted = [...new Set(txids)];
++    for (let i = 0; i < wanted.length; i += 50) {
++      try {
++        let missing = wanted.slice(i, i + 50);
++        while (missing.length > 0) {
++          const { txs } = await this.indexer.getVirtualTxs(missing);
++          for (const psbt of txs) {
++            out.set(chunkLZAINCGU_cjs.Transaction.fromPSBT(base.base64.decode(psbt)).id, psbt);
++          }
++          const still = missing.filter((txid) => !out.has(txid));
++          if (still.length === missing.length) break;
++          missing = still;
++        }
++      } catch {
        }
 -      hasMore = page ? txs.length === chunkLZAINCGU_cjs.DEFAULT_PAGE_SIZE : false;
 -      pageIndex++;
-+      hasMore = page !== void 0 && page !== null && page.current < page.total && page.next > pageIndex && txs.length > 0;
-+      if (page) pageIndex = page.next;
      }
      return out;
    }
-@@ -19376,7 +19380,7 @@ var MessageBus = class {
-     this.initialized = true;
-   }
-   async buildServices(config) {
--    const arkProvider = new chunkLZAINCGU_cjs.RestOperatorProvider(config.arkServer.url);
-+    const arkProvider = new CachingOperatorProvider(new chunkLZAINCGU_cjs.RestOperatorProvider(config.arkServer.url));
-     const storage = {
-       walletRepository: this.walletRepository,
-       contractRepository: this.contractRepository,
 diff --git a/dist/chunk-YKT4NAQG.js b/dist/chunk-YKT4NAQG.js
-index 9cc17c001f4a564118ef0ec2b87b49caf2fd0b09..b168ba3bd526d1eeba948dfa6b0af7bcf1061bed 100644
+index 9cc17c001f4a564118ef0ec2b87b49caf2fd0b09..008f262538e7681c8d6bbc8c5dfbd832aa5ab7cf 100644
 --- a/dist/chunk-YKT4NAQG.js
 +++ b/dist/chunk-YKT4NAQG.js
-@@ -5711,14 +5711,15 @@ var VtxoManager = class _VtxoManager {
-    * {@link getExpiringVtxos} against a caller-supplied chain tip, so a settle pass's select,
-    * re-select and expiry sort share one tip instead of fetching (and disagreeing on) one each.
-    */
--  async selectExpiringVtxos(thresholdMs, now) {
-+  async selectExpiringVtxos(thresholdMs, now, maxSyncAgeMs) {
-     if (this.settlementConfig === false && thresholdMs === void 0) {
-       return [];
-     }
-     const threshold = thresholdMs !== void 0 ? thresholdMs : this.configuredThresholdMs();
-     const vtxosPromise = this.wallet.getSpendableVtxos({
-       withRecoverable: true,
--      genericallySpendableOnly: true
-+      genericallySpendableOnly: true,
-+      ...maxSyncAgeMs !== void 0 ? { maxSyncAgeMs } : {}
+@@ -6216,8 +6216,14 @@ var VtxoManager = class _VtxoManager {
+     const cm = await this.wallet.getContractManager();
+     const signerSet = signerSetFromInfo(info);
+     const nowSeconds = Math.floor(Date.now() / 1e3);
+-    const contractsWithVtxos = await cm.getContractsWithVtxos({
+-      type: ["default", "delegate"]
++    const type = ["default", "delegate"];
++    const affected = (await cm.getContracts({ type })).filter((contract) => {
++      const serverPubKey = contract.params.serverPubKey;
++      return !!serverPubKey && classifyAgainstSignerSet(serverPubKey, signerSet, nowSeconds).status !== "CURRENT";
++    });
++    const contractsWithVtxos = affected.length === 0 ? [] : await cm.getContractsWithVtxos({
++      type,
++      script: affected.map((contract) => contract.script)
      });
-     const tip = now ?? await fetchTimeHeight(this.wallet);
-     const vtxos = await vtxosPromise;
-@@ -6730,7 +6731,7 @@ var VtxoManager = class _VtxoManager {
-     if (!this.renewalInProgress) {
-       try {
-         now = await fetchTimeHeight(this.wallet);
--        expiringVtxos = await this.selectExpiringVtxos(void 0, now);
-+        expiringVtxos = await this.selectExpiringVtxos(void 0, now, 3e4);
-         expiringVtxos = await this.revalidateBeforeSettle(expiringVtxos, void 0, now);
-       } catch (e) {
-         console.error("Error fetching expiring VTXOs:", e);
-@@ -7452,17 +7453,20 @@ var IndexerExitDataSource = class {
+     const reportsBySigner = /* @__PURE__ */ new Map();
+     const migratable = [];
+@@ -7418,6 +7424,10 @@ async function captureExitBranch(params) {
+         psbtByTxid.set(Transaction.fromPSBT(base64.decode(psbt)).id, psbt);
+       }
+     }
++    const missing = nonCommitment.filter((txid) => !psbtByTxid.has(txid));
++    if (missing.length > 0) {
++      throw new Error(`exit capture of ${vtxo.txid}:${vtxo.vout} is missing ${missing.length} of ${nonCommitment.length} virtual txs`);
++    }
+   }
+   const virtualTxs = ordered.map((c) => {
+     const expires = Number(c.expiresAt);
+@@ -7452,34 +7462,46 @@ var IndexerExitDataSource = class {
    indexer;
    name = "indexer";
    async getVtxoChain(vtxo) {
 -    const chain = [];
 -    let pageIndex = 0;
 -    let hasMore = true;
+-    while (hasMore) {
+-      const { chain: page, page: meta } = await this.indexer.getVtxoChain(
+-        { txid: vtxo.txid, vout: vtxo.vout },
+-        { pageIndex, pageSize: DEFAULT_PAGE_SIZE }
 +    const outpoint = { txid: vtxo.txid, vout: vtxo.vout };
 +    const { chain: whole, page: first } = await this.indexer.getVtxoChain(outpoint);
 +    if (!first || first.current >= first.total) return whole;
 +    const chain = [...whole];
-+    let pageIndex = first.next;
-+    let hasMore = first.next > 0 && whole.length > 0;
-     while (hasMore) {
-       const { chain: page, page: meta } = await this.indexer.getVtxoChain(
--        { txid: vtxo.txid, vout: vtxo.vout },
++    let asked = 0;
++    let meta = first;
++    let received = whole.length;
++    for (; ; ) {
++      if (!meta || meta.current >= meta.total) break;
++      if (received === 0 || meta.next <= asked) {
++        throw new Error(`Indexer paging contradicts itself: page ${meta.current} of ${meta.total} ${received === 0 ? "is empty" : `points to ${meta.next} after ${asked}`}`);
++      }
++      asked = meta.next;
++      const answer = await this.indexer.getVtxoChain(
 +        outpoint,
-         { pageIndex, pageSize: DEFAULT_PAGE_SIZE }
++        { pageIndex: asked, pageSize: DEFAULT_PAGE_SIZE }
        );
-       chain.push(...page);
+-      chain.push(...page);
 -      hasMore = meta ? page.length === DEFAULT_PAGE_SIZE : false;
 -      pageIndex++;
-+      hasMore = meta !== void 0 && meta !== null && meta.current < meta.total && meta.next > pageIndex && page.length > 0;
-+      if (meta) pageIndex = meta.next;
++      chain.push(...answer.chain);
++      meta = answer.page;
++      received = answer.chain.length;
      }
      return chain;
    }
-@@ -7478,8 +7482,8 @@ var IndexerExitDataSource = class {
-       for (const psbt of txs) {
-         out.set(Transaction.fromPSBT(base64.decode(psbt)).id, psbt);
+   async getVirtualTxs(txids) {
+     const out = /* @__PURE__ */ new Map();
+-    let pageIndex = 0;
+-    let hasMore = true;
+-    while (hasMore) {
+-      const { txs, page } = await this.indexer.getVirtualTxs(txids, {
+-        pageIndex,
+-        pageSize: DEFAULT_PAGE_SIZE
+-      });
+-      for (const psbt of txs) {
+-        out.set(Transaction.fromPSBT(base64.decode(psbt)).id, psbt);
++    const wanted = [...new Set(txids)];
++    for (let i = 0; i < wanted.length; i += 50) {
++      try {
++        let missing = wanted.slice(i, i + 50);
++        while (missing.length > 0) {
++          const { txs } = await this.indexer.getVirtualTxs(missing);
++          for (const psbt of txs) {
++            out.set(Transaction.fromPSBT(base64.decode(psbt)).id, psbt);
++          }
++          const still = missing.filter((txid) => !out.has(txid));
++          if (still.length === missing.length) break;
++          missing = still;
++        }
++      } catch {
        }
 -      hasMore = page ? txs.length === DEFAULT_PAGE_SIZE : false;
 -      pageIndex++;
-+      hasMore = page !== void 0 && page !== null && page.current < page.total && page.next > pageIndex && txs.length > 0;
-+      if (page) pageIndex = page.next;
      }
      return out;
    }
-@@ -19354,7 +19358,7 @@ var MessageBus = class {
-     this.initialized = true;
-   }
-   async buildServices(config) {
--    const arkProvider = new RestOperatorProvider(config.arkServer.url);
-+    const arkProvider = new CachingOperatorProvider(new RestOperatorProvider(config.arkServer.url));
-     const storage = {
-       walletRepository: this.walletRepository,
-       contractRepository: this.contractRepository,
