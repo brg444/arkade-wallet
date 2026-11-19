@@ -1,8 +1,9 @@
 # Load-time work
 
 This branch (`perf`, cut from `redesign`) carries the performance changes. It is separate so that `redesign`
-stays reviewable on its own. So far everything is in the SDK, reaching the wallet through the pnpm patch
-(`patches/@arkade-os__sdk@0.5.6.patch`); wallet-side changes come next.
+stays reviewable on its own. The SDK changes reach the wallet through the pnpm patch
+(`patches/@arkade-os__sdk@0.5.6.patch`). The first wallet change is below them: Home from what it showed on
+the last visit.
 
 The plan was reviewed by Codex on 2026-11-18. This revision follows that review: two changes came out, one
 changed shape, and every figure below is restated with all of its samples.
@@ -91,10 +92,65 @@ after install: `compare.mjs heavy` and `compare.mjs typical` (every spendable co
 missing: 220 coins and 89,039 sats, 97 coins and 148,000 sats) and `exit-data.mjs heavy` (a chain of 1,406
 entries, all 1,010 transactions back in 21 requests, the longest URL 3.3 KB).
 
+## Home from what it showed last time
+
+A returning visit used to hold a loading screen until three things had happened in a row: the worker had
+started and built the wallet, the swap client was ready, and the first reload had run. Traced on the page's
+own clock, with the worker stopped beforehand as a browser does after about 30 seconds without a client,
+that is 2.4 to 2.6 s: 0.4 s waiting for the page's `/v1/info`, 1.9 s inside the worker's setup, 0.2 s for
+the swap client and 0.2 to 0.3 s for the reload. The setup is that long because it waits, one after the
+other, on `/v1/info` and `/v1/delegator/info`, a coin sync, the pending-transaction read and the
+subscription.
+
+Home now does not wait for any of it.
+
+- **Server info and prices** start from their last answers (`77bdd37`). The passwordless unlock, and with
+  it the worker, no longer waits for the page's `/v1/info`.
+- **Home** is drawn from what it showed on the last visit, with the syncing line beside it, until the
+  first load takes over (`cbe00fd`).
+
+| Returning visit | Before | Now |
+| --- | --- | --- |
+| Typical, worker still running: Home on screen | 1.63 s (1.29 to 2.13) | 0.11 s (0.08 to 0.23) |
+| Typical, worker still running: wallet loaded | 1.63 s | 1.43 s (1.20 to 1.80) |
+| Typical, worker stopped: Home on screen | 2.43 s (2.15 to 2.91) | 0.10 s (0.08 to 0.26) |
+| Typical, worker stopped: wallet loaded | 2.43 s | 2.37 s (2.14 to 2.66) |
+| Heavy, worker still running: Home on screen | 1.98 s (1.57 to 3.93) | 0.11 s (0.08 to 0.24) |
+| Heavy, worker still running: wallet loaded | 1.98 s | 1.85 s (1.50 to 3.28) |
+| Heavy, worker stopped: Home on screen | 2.55 s (2.22 to 3.46) | 0.11 s (0.09 to 0.24) |
+| Heavy, worker stopped: wallet loaded | 2.55 s | 2.53 s (2.37 to 3.56) |
+
+Sixteen visits per cell over two rounds, the two builds taking turns, median with the full range, same
+machine and network as above. "Wallet loaded" is when the app stops being marked busy; before this change
+that was the moment Home appeared. The earlier tables on this page were all taken with the worker still
+running, which is the less common case.
+
+What keeps the stored figures honest:
+
+- A snapshot is read only by its own wallet, on its own server, by the build that wrote it. It is written
+  after a completed load. A reset stops the writing before it wipes, and the wipe takes the snapshot with
+  everything else in storage. The first visit after an update therefore loads as it did before.
+- A locked wallet shows nothing. Home is drawn once the password has been accepted.
+- Until the load lands, Home is the only wallet screen shown. A tap that navigates is kept and takes
+  effect then, so Send, Receive, Activity and Settings never open on a wallet that has not loaded.
+- With no price there is no stored Home, so a balance is never drawn as zero. An app request, an
+  unreachable server and a failed first load all come first, as before.
+- The fiat figure can move by a few cents a moment after it appears, when the live price replaces the
+  last one. That happened in 2 of every 16 visits.
+
+Checked in a browser besides the unit tests: a tap on Send, Receive or View all 0.3 to 0.5 s into a visit
+opens its screen at 1.7 s, when the wallet has loaded, with no error; a password wallet shows only the
+unlock screen while locked, Home 0.15 s after the right password and nothing after a wrong one.
+
+Known gaps. A held tap gives no sign that it was taken until the screen opens. The stored figures carry
+no time, only the syncing line. The end-to-end suite has not been run with this; its `waitForWalletPage`
+helper now waits for the app to stop being busy.
+
 ## Not done yet
 
-- Wallet: Home waits for the page's `/v1/info`, the worker's `/v1/delegator/info` and the first reload,
-  which itself waits on the swap client. None of that needs to stand between a stored balance and the screen.
+- Wallet and SDK: the load itself is as long as it was. The worker's setup is the 1.9 s of it, and
+  shortening that is SDK work: answer the page once the wallet exists, and let the sync, the pending read
+  and the subscription finish behind it; do not rebuild a wallet that is still running.
 - Wallet: the syncing line is cleared by a one-second poll of the worker, and a reload follows a second
   later. One coherent snapshot per sync, as the review asks, replaces both.
 - Wallet: split the 2.8 MB bundle.
