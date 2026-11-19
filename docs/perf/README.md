@@ -2,8 +2,8 @@
 
 This branch (`perf`, cut from `redesign`) carries the performance changes. It is separate so that `redesign`
 stays reviewable on its own. The SDK changes reach the wallet through the pnpm patch
-(`patches/@arkade-os__sdk@0.5.6.patch`). The first wallet change is below them: Home from what it showed on
-the last visit.
+(`patches/@arkade-os__sdk@0.5.6.patch`). The wallet changes are below them: Home from what it showed on the
+last visit, then the load behind it.
 
 The plan was reviewed by Codex on 2026-11-18. This revision follows that review: two changes came out, one
 changed shape, and every figure below is restated with all of its samples.
@@ -146,11 +146,98 @@ Known gaps. A held tap gives no sign that it was taken until the screen opens. T
 no time, only the syncing line. The end-to-end suite has not been run with this; its `waitForWalletPage`
 helper now waits for the app to stop being busy.
 
+## The load behind it
+
+With Home on screen at once, what a returning visit still waits for is the wallet behind it: the syncing
+line, and any tap, which is held until the load lands. That took 2.3 to 2.7 s when the worker had to start.
+
+A build with timing marks on the page and inside the worker's setup shows where it goes. The marks are not
+committed; the tools that add them are in `.verify/perf/tools`. Typical wallet, worker stopped, the median
+of six to eight visits for each step.
+
+| Step | Before | With the early connection |
+| --- | --- | --- |
+| Page, until it calls the worker: config, the stored secret, the identity | 0.41 s | 0.36 s |
+| Worker: `/v1/info` and `/v1/delegator/info`, side by side | 0.35 s | 0.25 s |
+| Worker: contracts read from storage | 0.10 s | 0.10 s |
+| Worker: waiting for the chain connection | 0.46 s | 0.11 s |
+| Worker: coins on chain, then the address watch | 0.20 s | 0.19 s |
+| Worker: boarding coins, a second time | 0.10 s | 0.10 s |
+| Worker: history and pending transactions, from storage | 0.05 s | 0.05 s |
+| Worker: the incoming-funds subscription | 0.10 s | 0.10 s |
+| Page: swap client ready, one `/v1/info` through the worker | 0.49 s | 0.45 s |
+| Page: the first reload | 0.24 s | 0.21 s |
+| Wallet loaded | 2.56 s | 1.93 s |
+
+The chain is reached over an Electrum WebSocket, which is why none of the worker's chain steps showed up as
+requests in the earlier traces. Two changes came out of this.
+
+**The chain connection opens as the page starts** (`8df2734`). The Electrum client holds every request for
+half a second after its socket opens, and a worker that has just started only opened the socket once it had
+asked the server which network it is on, so setup stood still for about 0.45 s. The page now names the
+stored wallet's network to the worker as the first thing it does, and the worker opens the connection then.
+The worker acts only on a network the SDK lists an endpoint for.
+
+**A reload asks for its coins, history and balance together** (`25d602f`). They were read one after the
+other, and the balance alone is a round trip to the chain. Every reload is shorter by the same amount, not
+only the first.
+
+| Returning visit, wallet loaded | Stored Home only | Early connection |
+| --- | --- | --- |
+| Typical, worker stopped | 2.27 s (2.12 to 2.42) | 1.86 s (1.59 to 2.11) |
+| Heavy, worker stopped | 2.65 s (2.38 to 2.76) | 2.16 s (1.97 to 2.62) |
+| Typical, worker running | 1.44 s (1.26 to 1.82) | 1.40 s (1.30 to 1.68) |
+| Heavy, worker running | 1.93 s (1.57 to 2.43) | 1.80 s (1.59 to 2.00) |
+
+| Returning visit, wallet loaded | Early connection | Reads together as well |
+| --- | --- | --- |
+| Typical, worker stopped | 1.85 s (1.68 to 2.14) | 1.75 s (1.59 to 1.93) |
+| Heavy, worker stopped | 2.07 s (1.83 to 2.33) | 1.96 s (1.85 to 2.12) |
+| Typical, worker running | 1.42 s (1.30 to 1.66) | 1.35 s (1.21 to 1.50) |
+| Heavy, worker running | 1.70 s (1.52 to 1.82) | 1.56 s (1.46 to 1.72) |
+
+Each table is its own session of sixteen visits per cell, the two builds taking turns, median with the full
+range. With the worker stopped the syncing line also goes about 0.4 s sooner (typical 2.64 to 2.26 s, heavy
+2.87 to 2.46 s). It is cleared by a one-second poll, so the second change does not move it.
+
+One cost: when the worker has to start, Home is on screen at 0.14 to 0.15 s instead of 0.12 s, because the
+worker now starts while the page draws. This machine has two cores, so a phone should lose less.
+
+One figure in the first table is not to be trusted beyond this machine. On visits where the worker had to
+start, the `/v1/info` the swap client waits for took 0.4 to 0.5 s instead of 0.15 s, all of it in opening a
+connection. Requests here leave through a proxy that opens connections its own way, and a phone that talks
+to the server directly may not pay this. It has not been checked on one.
+
+## What the load still waits for
+
+Largest first, for the typical wallet with the worker stopped, out of about 1.8 s.
+
+- **Five round trips to the chain, 0.5 s.** Setup makes four of them one after the other (the coins of
+  every onchain address, the watch on them, the boarding coins again, the incoming-funds subscription), and
+  each reload makes one for the balance. All five are about boarding coins. The SDK has an option that
+  takes them off the path, `lazyBoarding`, and the wallet deliberately does not use it, for two reasons
+  noted beside the setup call: its refresh is never retried, and its update message carries every stored
+  coin, which the receive screen reads as a payment. Reading the SDK adds a third: with the option on, the
+  history cache is written only after that refresh. Mending this is work in the SDK's worker message
+  handler, which upstream has changed heavily since the version this wallet pins. It is the largest step
+  left and it needs a decision before any code.
+- **The page before it calls the worker, 0.36 s.** The stored secret is decrypted twice, once to learn that
+  there is no password and once to unlock, and the recovery phrase is stretched into a seed twice, once for
+  the identity and once for the backup key. Here that is about 0.05 s for each decryption and 0.12 s for
+  the two seeds together, and a slow phone takes several times as long. Left alone for now: it is
+  key-handling code, and the gain on this machine is small.
+- **Server info in the worker, 0.25 to 0.35 s.** It lasts as long as `/v1/delegator/info`, which is on a host
+  nothing has connected to yet. A preconnect from the page might shorten it on a phone. It cannot be
+  measured through this machine's proxy, so it is not done.
+- **The swap client's `/v1/info`, 0.15 to 0.2 s.** The worker read the same thing a second earlier. The parked
+  operator-info memo would answer it, once reads that must be live go around the memo.
+- **The half second in the Electrum client, 0.1 s of it.** A worker takes 0.08 s to start and the socket
+  0.19 s to open, so even opened first the connection is ready a little after setup wants it.
+- **A worker that is still running rebuilds its wallet, 0.8 s of that visit's 1.35 s.** This is the less
+  common visit, and the fix is in the SDK's worker lifecycle.
+
 ## Not done yet
 
-- Wallet and SDK: the load itself is as long as it was. The worker's setup is the 1.9 s of it, and
-  shortening that is SDK work: answer the page once the wallet exists, and let the sync, the pending read
-  and the subscription finish behind it; do not rebuild a wallet that is still running.
 - Wallet: the syncing line is cleared by a one-second poll of the worker, and a reload follows a second
   later. One coherent snapshot per sync, as the review asks, replaces both.
 - Wallet: split the 2.8 MB bundle.
