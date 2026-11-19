@@ -232,3 +232,30 @@ describe('Home from what it showed last time', () => {
     expect(localStorage.getItem('homeSnapshot')).toBeNull()
   })
 })
+
+describe('loading the wallet', () => {
+  it('asks for its coins, its history and its balance together', async () => {
+    mount()
+    await act(() => wallet.initWallet({ privateKey: KEY }))
+    mocks.service.getVtxos.mockClear()
+    mocks.service.getActivityHistory.mockClear()
+    mocks.service.getBalance.mockClear()
+    // The first answer is held back: the other reads must not be waiting on it.
+    let answer: (coins: never[]) => void = () => {}
+    mocks.service.getVtxos.mockReturnValueOnce(new Promise<never[]>((resolve) => (answer = resolve)))
+
+    let loading = Promise.resolve()
+    act(() => {
+      loading = wallet.reloadWallet(mocks.service as never)
+    })
+    await Promise.resolve()
+
+    expect(mocks.service.getVtxos).toHaveBeenCalledTimes(2)
+    expect(mocks.service.getActivityHistory).toHaveBeenCalledOnce()
+    expect(mocks.service.getBalance).toHaveBeenCalledOnce()
+
+    answer([])
+    await act(() => loading)
+    expect(wallet.balance).toBe(99_000)
+  })
+})

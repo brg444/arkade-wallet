@@ -696,13 +696,18 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     if (isFirstLoad) setLoadError(null)
     try {
       if (isFirstLoad) setLoadingStatus(t('loading.fetchingCoins'))
-      const vtxos = await getVtxos(swWallet)
-      // Fetched apart from the set above, which must not learn about exits —
-      // see `getUnrolledVtxos`. Cheap: the worker answers both from its local
-      // repo, so this is a postMessage, not a request.
-      const unrolledVtxos = await getUnrolledVtxos(swWallet)
+      // Asked for together. None of the four needs another's answer and the worker
+      // serves them side by side, so one after the other only added their times up,
+      // and the balance alone waits on a round trip to the chain.
+      // The unrolled set is fetched apart from the first, which must not learn
+      // about exits — see `getUnrolledVtxos`.
+      const [vtxos, unrolledVtxos, activities, funds] = await Promise.all([
+        getVtxos(swWallet),
+        getUnrolledVtxos(swWallet),
+        getActivities(swWallet),
+        getBalance(swWallet),
+      ])
       if (isFirstLoad) setLoadingStatus(t('loading.fetchingTransactions'))
-      const activities = await getActivities(swWallet)
       // Before the metadata snapshot below, not after: `resolveExits` persists
       // what it learns, and the history memo reads a snapshot taken here, so a
       // write that lands after this line stays invisible until the next reload.
@@ -713,7 +718,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       // up what the store says.
       const lnSends = await lnSendViews()
       if (isFirstLoad) setLoadingStatus(t('loading.updatingBalance'))
-      const { total, available, assets, availableAssets, unrolled } = await getBalance(swWallet)
+      const { total, available, assets, availableAssets, unrolled } = funds
       // An exited coin is no longer Arkade money: it cannot be spent offchain,
       // no batch can lift it back, and this wallet has no path that moves it —
       // the sweep belongs to the exit tool. The SDK's `total` is right for what
