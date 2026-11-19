@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import createFetchMock from 'vitest-fetch-mock'
 import WalletSwap from '../../../screens/Wallet/Swap/Index'
@@ -309,7 +309,7 @@ describe('Wallet swap flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /USD/i }))
     for (const key of ['1', '0', '0', '0']) await userEvent.click(screen.getByRole('button', { name: key }))
 
-    expect(primaryAmount()).toHaveAccessibleName('Swap amount, 1000 sats')
+    expect(primaryAmount()).toHaveAccessibleName('Swap amount, 1,000 sats')
     const continueButton = screen.getByRole('button', { name: 'Continue' })
     await waitFor(() => expect(continueButton).toBeEnabled(), { timeout: 3_000 })
     fireEvent.click(continueButton)
@@ -331,7 +331,7 @@ describe('Wallet swap flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /Bitcoin/i }))
     for (const key of ['1', '0', '0', '0']) await userEvent.click(screen.getByRole('button', { name: key }))
 
-    expect(primaryAmount()).toHaveAccessibleName('Swap amount, 1000 BRL')
+    expect(primaryAmount()).toHaveAccessibleName('Swap amount, 1,000 BRL')
     const continueButton = screen.getByRole('button', { name: 'Continue' })
     await waitFor(() => expect(continueButton).toBeEnabled(), { timeout: 3_000 })
     fireEvent.click(continueButton)
@@ -364,17 +364,23 @@ describe('Wallet swap flow', () => {
     expect(screen.queryByRole('button', { name: /^Show .+ first/ })).not.toBeInTheDocument()
   })
 
-  it('replaces the available balance with a max action for insufficient balance', async () => {
+  it('names an insufficient balance under the figure, with Max beside the balance', async () => {
     renderSwap({ flow: { swapFromAssetId: 'btc', setSwapFromAssetId: vi.fn() }, wallet: NO_ASSETS })
+
+    const useMaxButton = screen.getByRole('button', { name: /^Use maximum/ })
+    expect(useMaxButton).toHaveAccessibleName('Use maximum 0.00100000 BTC')
+    expect(useMaxButton).toHaveTextContent('Max')
+    expect(screen.getByText('0.00100000 BTC')).toBeInTheDocument()
 
     for (const key of ['9', '9', '9']) {
       await userEvent.click(screen.getByRole('button', { name: key }))
     }
 
     expect(primaryAmount().className).toContain('swap-amount-display--invalid')
-
-    const useMaxButton = await screen.findByRole('button', { name: /^Use maximum/ })
-    expect(useMaxButton).toHaveAccessibleName('Use maximum 0.00100000 BTC')
+    const warning = await screen.findByText('Insufficient balance')
+    // a balance limit is said on the screen, not in a toast
+    expect(warning.closest('[data-sonner-toast]')).toBeNull()
+    expect(warning.closest('.swap-figure')).not.toBeNull()
     expect(secondaryAmount()).toBeInTheDocument()
     await userEvent.click(useMaxButton)
 
@@ -392,7 +398,7 @@ describe('Wallet swap flow', () => {
 
     await waitFor(() => expect(screen.getByText('Quote unavailable')).toBeInTheDocument(), { timeout: 3_000 })
     expect(screen.getByText('Quote unavailable').closest('[data-sonner-toast]')).not.toBeNull()
-    expect(screen.getByRole('button', { name: '0.00100000 BTC' })).toBeInTheDocument()
+    expect(screen.getByText('0.00100000 BTC')).toBeInTheDocument()
   })
 
   it('stops a partial asset swap that cannot fund its change carrier', async () => {
@@ -451,6 +457,49 @@ describe('Wallet swap flow', () => {
     // fromDecimals must pair with fromTicker ('BTC' -> 8), the solver's real
     // protocol decimals — otherwise the persisted receipt mislabels the scale
     expect(exchange.mock.calls[0][2]).toMatchObject({ fromDecimals: 8 })
+  })
+
+  it('reviews like Send: the route, what arrives, then the rows, with Cancel and an inline error', async () => {
+    renderSwap({ flow: { swapFromAssetId: 'btc', setSwapFromAssetId: vi.fn() } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Receive Choose asset/i }))
+    fireEvent.click(screen.getByRole('button', { name: /USD/i }))
+    for (const key of ['5', '0']) await userEvent.click(screen.getByRole('button', { name: key }))
+    const continueButton = screen.getByRole('button', { name: 'Continue' })
+    await waitFor(() => expect(continueButton).toBeEnabled(), { timeout: 3_000 })
+    fireEvent.click(continueButton)
+
+    const sheet = await screen.findByRole('dialog', { name: 'Review swap' })
+    expect(within(sheet).getByRole('heading', { name: 'BTC to USD' })).toBeInTheDocument()
+    const arriving = within(sheet).getByRole('region', { name: 'Receive' })
+    expect(arriving).toHaveTextContent(/USD$/)
+    const rows = [...sheet.querySelectorAll('.swap-metric-row__label')].map((label) => label.textContent)
+    expect(rows).toEqual(['Swap', 'Fees', 'Rate'])
+    // every row carries its icon, as the rows of Send's review do
+    for (const label of sheet.querySelectorAll('.swap-metric-row__label'))
+      expect(label.querySelector('svg')).not.toBeNull()
+
+    exchange.mockRejectedValueOnce(new Error('solver went away'))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Confirm swap' }))
+    expect(await within(sheet).findByRole('alert')).toHaveTextContent('solver went away')
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Review swap' })).not.toBeInTheDocument())
+  })
+
+  it('shows what was given behind the success sheet, as typed', async () => {
+    renderSwap({ flow: { swapFromAssetId: 'btc', setSwapFromAssetId: vi.fn() } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Receive Choose asset/i }))
+    fireEvent.click(screen.getByRole('button', { name: /USD/i }))
+    for (const key of ['5', '0']) await userEvent.click(screen.getByRole('button', { name: key }))
+    const continueButton = screen.getByRole('button', { name: 'Continue' })
+    await waitFor(() => expect(continueButton).toBeEnabled(), { timeout: 3_000 })
+    fireEvent.click(continueButton)
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm swap' }))
+
+    await screen.findByTestId('success-sheet')
+    expect(document.querySelector('.sheet-page__backdrop')).toHaveTextContent('€50.00')
   })
 
   it('quotes the covenant floor with the market fee conceded', async () => {
@@ -674,8 +723,8 @@ describe('Wallet swap flow', () => {
     // the wallet holds 100,000 sats available (loaded async) next to USDT and
     // DEPIX; the SDK's `available` already excludes the dust carrier their
     // change needs, so the wallet must not subtract it again
-    await userEvent.click(await screen.findByRole('button', { name: '100,000 sats' }))
-    expect(primaryAmount()).toHaveTextContent('100000 sats')
+    await userEvent.click(await screen.findByRole('button', { name: 'Use maximum 100,000 sats' }))
+    expect(primaryAmount()).toHaveTextContent('100,000 sats')
 
     const continueButton = screen.getByRole('button', { name: 'Continue' })
     await waitFor(() => expect(continueButton).toBeEnabled(), { timeout: 3_000 })
@@ -702,7 +751,7 @@ describe('Wallet swap flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /Receive Choose asset/i }))
     fireEvent.click(await screen.findByRole('button', { name: /Bitcoin/i }))
 
-    await userEvent.click(await screen.findByRole('button', { name: '100.00 USD' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Use maximum 100.00 USD' }))
     expect(screen.queryByRole('button', { name: '150.00 USD' })).not.toBeInTheDocument()
 
     const continueButton = screen.getByRole('button', { name: 'Continue' })
@@ -732,12 +781,12 @@ describe('Wallet swap flow', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Receive Choose asset/i }))
     fireEvent.click(screen.getByRole('button', { name: /USD/i }))
-    await userEvent.click(await screen.findByRole('button', { name: '1,093,180 sats' }))
-    expect(primaryAmount()).toHaveTextContent('1093180 sats')
+    await userEvent.click(await screen.findByRole('button', { name: 'Use maximum 1,093,180 sats' }))
+    expect(primaryAmount()).toHaveTextContent('1,093,180 sats')
 
     await userEvent.click(screen.getByRole('button', { name: 'Show USD amount first' }))
     expect(primaryAmount()).toHaveTextContent('$1,093.18')
-    expect(secondaryAmount()).toHaveTextContent('1093180 sats')
+    expect(secondaryAmount()).toHaveTextContent('1,093,180 sats')
     expect(screen.getByLabelText('Swap keypad for 1093.18')).toBeInTheDocument()
 
     const continueButton = screen.getByRole('button', { name: 'Continue' })
@@ -976,12 +1025,12 @@ describe('Wallet swap flow', () => {
     }
 
     expect(primaryAmount()).toHaveAccessibleName('Swap amount, $10')
-    expect(secondaryAmount()).toHaveTextContent('10000 sats')
+    expect(secondaryAmount()).toHaveTextContent('10,000 sats')
     expect(screen.getByRole('button', { name: 'Swap amount, $10' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Show .+ first/ }))
-    expect(primaryAmount()).toHaveAccessibleName('Swap amount, 10000 sats')
+    expect(primaryAmount()).toHaveAccessibleName('Swap amount, 10,000 sats')
     expect(secondaryAmount()).toHaveTextContent('$10')
-    expect(screen.getByRole('button', { name: 'Swap amount, 10000 sats' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Swap amount, 10,000 sats' })).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /Show .+ first/ }))
     expect(primaryAmount()).toHaveAccessibleName('Swap amount, $10')
@@ -1071,8 +1120,50 @@ describe('Wallet swap flow', () => {
       await userEvent.click(screen.getByRole('button', { name: key }))
     }
 
-    await screen.findByRole('button', { name: /^Use maximum/ }, { timeout: 3_000 })
+    await screen.findByText('Insufficient balance', {}, { timeout: 3_000 })
     expect(screen.getByTestId('swap-amount-value-shake')).toBe(amountValue)
+  })
+
+  it('offers a decimal point only when the entry unit has decimals', async () => {
+    renderSwap({
+      config: { currency: Currencies.BTC, unit: Unit.SATS },
+      flow: { swapFromAssetId: 'btc', setSwapFromAssetId: vi.fn() },
+    })
+    // sats are whole: no point key, the delete key stays where it was
+    expect(screen.queryByRole('button', { name: '.' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete digit' })).toBeInTheDocument()
+  })
+
+  it('offers a decimal point for a currency amount and sets its cents back', async () => {
+    renderSwap({ flow: { swapFromAssetId: 'btc', setSwapFromAssetId: vi.fn() }, wallet: NO_ASSETS })
+
+    for (const key of ['2', '.', '5', '0']) await userEvent.click(screen.getByRole('button', { name: key }))
+
+    expect(primaryAmount()).toHaveAccessibleName('Swap amount, €2.50')
+    const minor = [...primaryAmount().querySelectorAll('.figure__minor')].map((slot) => slot.textContent).join('')
+    expect(minor).toBe('.50')
+  })
+
+  it('shows the receive value only when it is in another currency than the estimate', async () => {
+    const { unmount } = renderSwap({
+      config: { currency: Currencies.USD },
+      flow: { swapFromAssetId: 'btc', setSwapFromAssetId: vi.fn() },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Receive Choose asset/i }))
+    fireEvent.click(screen.getByRole('button', { name: /USD/i }))
+    for (const key of ['5', '0']) await userEvent.click(screen.getByRole('button', { name: key }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled(), { timeout: 3_000 })
+    // receiving USD with the wallet in USD: "$49.85" beside "49.85 USD" says nothing new
+    expect(screen.getByRole('button', { name: /Receive USD/ }).querySelector('strong')).toBeNull()
+    unmount()
+
+    renderSwap({ flow: { swapFromAssetId: 'btc', setSwapFromAssetId: vi.fn() } })
+    fireEvent.click(screen.getByRole('button', { name: /Receive Choose asset/i }))
+    fireEvent.click(screen.getByRole('button', { name: /USD/i }))
+    for (const key of ['5', '0']) await userEvent.click(screen.getByRole('button', { name: key }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled(), { timeout: 3_000 })
+    // in a euro wallet the USD estimate gets its euro value
+    expect(screen.getByRole('button', { name: /Receive USD/ }).querySelector('strong')).toHaveTextContent('€')
   })
 
   it('keeps swap history out of the swap composer', () => {

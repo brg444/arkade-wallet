@@ -525,12 +525,26 @@ button {
 .home-actions .button {
   flex: 1 1 0;
   min-width: 0;
+  min-height: 56px;
+  padding: 0 1.125rem;
+  font-family: var(--font-family-mono);
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Receive is drawn in ink, as the site draws its secondary button */
+.home-actions .button.outline,
+.home-actions .button.outline:active {
+  box-shadow: inset 0 0 0 1.5px var(--fg);
 }
 
 .home-actions__label {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 0.5rem;
 }
 
@@ -675,6 +689,25 @@ button {
   min-height: 2.25rem;
   align-items: center;
   justify-content: space-between;
+}
+
+/* A section opens with a 2px rule above its heading row */
+.home-section--ruled .home-section__header {
+  border-top: 2px solid var(--fg);
+  padding-top: 0.625rem;
+}
+
+/* Accounts are a ruled list: a hairline under each row, amounts in mono */
+.home-section--ruled .asset-card {
+  min-height: 4.25rem;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+}
+
+.home-section--ruled .asset-card__value {
+  font-family: var(--font-family-mono);
+  font-size: 0.9375rem;
+  letter-spacing: 0;
 }
 
 .home-section__content {
@@ -2143,7 +2176,6 @@ html.palette-dark .send-asset-menu {
 /* container rules live with the rest of the swap layout further down */
 
 .swap-flip-button,
-.swap-keypad button,
 .swap-token-row,
 .swap-amount-display,
 .swap-amount-secondary,
@@ -2156,23 +2188,13 @@ html.palette-dark .send-asset-menu {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The composer follows the Send keypad: the figure leads, the two sides of the
+ * trade sit as flat rows under it, then the keypad. */
 .swap-composer {
-  position: relative;
   display: flex;
+  min-height: 0;
   flex-direction: column;
-  gap: 0.5rem;
-}
-
-.swap-input-card,
-.swap-receive-card,
-.swap-detail-card,
-.swap-review-card {
-  border-radius: var(--radius-xl);
-  background: var(--bg);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--fg) 5%, transparent),
-    0 1px 2px -1px color-mix(in srgb, var(--fg) 7%, transparent),
-    0 2px 4px 0 color-mix(in srgb, var(--fg) 3%, transparent);
+  gap: 0.75rem;
 }
 
 .swap-drawer-content .swap-token-list,
@@ -2183,127 +2205,28 @@ html.palette-dark .send-asset-menu {
   overscroll-behavior: contain;
 }
 
-.swap-input-card {
+.swap-figure {
   display: flex;
-  min-height: 12.75rem;
-  flex-direction: column;
-  padding: 0.875rem 1rem 1.125rem;
-}
-
-.swap-input-card__asset {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-}
-
-.swap-input-card__asset-copy {
-  display: flex;
-  min-width: 0;
+  min-height: 11rem;
   flex: 1;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.swap-input-card__balance-slot {
-  display: grid;
-  width: fit-content;
-  max-width: 100%;
-  min-height: var(--text-xs-line);
-  align-items: center;
-}
-
-.swap-input-card__balance-slot > * {
-  grid-area: 1 / 1;
-}
-
-.swap-input-card__asset span,
-.swap-receive-card span {
-  color: var(--fg);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  line-height: var(--text-sm-line);
-}
-
-.swap-input-card__asset small,
-.swap-receive-card small {
-  color: var(--ink-3);
-  font-size: var(--text-xs);
-  font-weight: 400;
-  line-height: var(--text-xs-line);
-}
-
-.swap-input-card__balance {
-  display: block;
-  width: fit-content;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-html.palette-dark .swap-flip-button {
-  color: var(--purpletext);
-}
-
-.swap-input-card__asset button.swap-input-card__balance--max {
-  background: color-mix(in srgb, var(--red-700) 10%, var(--bg));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red-700) 14%, transparent);
-  color: color-mix(in srgb, var(--red-700) 84%, var(--fg));
-  font-weight: 500;
-  padding: 0 0.375rem;
-  text-decoration: none;
-}
-
-.swap-input-card__asset button.swap-input-card__balance--max:active {
-  color: color-mix(in srgb, var(--red-700) 100%, var(--fg));
-}
-
-.swap-input-card__asset span.swap-input-card__balance-error {
-  max-width: 100%;
-  color: color-mix(in srgb, var(--red-700) 84%, var(--fg));
-  font-size: var(--text-xs);
-  font-weight: 500;
-  line-height: var(--text-xs-line);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.swap-amount-stack {
-  display: flex;
-  flex: 1;
-  min-height: 7.75rem;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.375rem;
+  gap: 1rem;
 }
 
-.swap-amount-stage {
-  position: relative;
+.swap-figure__note {
   display: flex;
-  width: 100%;
-  min-height: 5.875rem;
-  flex-direction: column;
-  align-items: center;
+  min-height: 1.5rem;
   justify-content: center;
-  gap: 0.375rem;
 }
 
 .swap-amount-display {
-  width: 100%;
   display: flex;
-  min-height: var(--size-touch-min);
-  flex-direction: column;
-  align-items: center;
-  gap: 0.375rem;
-  border: 0;
+  max-width: 100%;
+  justify-content: center;
   background: transparent;
-  text-align: center;
-}
-
-.swap-amount-value--invalid {
-  color: color-mix(in srgb, var(--red-700) 84%, var(--fg));
+  padding: 0;
 }
 
 .swap-amount-value {
@@ -2314,14 +2237,19 @@ html.palette-dark .swap-flip-button {
   color: var(--fg);
   font-family: var(--font-family-heading);
   /* --swap-amount-scale steps down for long amounts (set inline per length) */
-  font-size: calc(var(--heading-2xl-size) * var(--swap-amount-scale, 1));
+  font-size: calc(5.25rem * var(--swap-amount-scale, 1));
   font-weight: 500;
-  letter-spacing: var(--heading-2xl-tracking);
-  line-height: var(--heading-2xl-line);
+  letter-spacing: -0.05em;
+  line-height: 1;
   outline: none;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   transform-origin: center;
+  transition: font-size 160ms var(--ease-out);
+}
+
+.swap-amount-value .figure__minor {
+  color: var(--ink-4);
 }
 
 .swap-amount-value-row,
@@ -2359,95 +2287,55 @@ html.palette-dark .swap-flip-button {
 }
 
 .swap-amount-value--secondary {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
+/* The unit toggle is the Send keypad's chip */
 .swap-amount-secondary {
-  position: relative;
-  display: inline-grid;
-  grid-template-columns: 1rem auto 1rem;
-  min-height: 2rem;
+  display: inline-flex;
+  min-height: 2.25rem;
   align-items: center;
-  justify-content: center;
-  column-gap: 0.5rem;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink-3);
-  padding: 0 0.625rem;
-  font-size: var(--text-sm);
-  font-weight: 500;
-  line-height: var(--text-sm-line);
-  font-variant-numeric: tabular-nums;
-  touch-action: manipulation;
-  transition:
-    background-color 160ms ease,
-    transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-.swap-amount-secondary__background {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  border-radius: 999px;
+  gap: 0.5rem;
+  border-radius: 0.625rem;
   background: var(--surface);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 5%, transparent);
-  pointer-events: none;
-}
-
-.swap-amount-secondary::before {
-  width: 1rem;
-  content: '';
-}
-
-.swap-amount-secondary::after {
-  position: absolute;
-  inset-block: calc((var(--size-touch-min) - 2rem) / -2);
-  inset-inline: -0.25rem;
-  content: '';
+  color: var(--ink-2);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  padding: 0 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .swap-amount-secondary:active {
-  transform: scale(var(--active-transform-scale));
+  background: var(--surface-strong);
 }
 
 .swap-amount-secondary__icon {
-  position: relative;
-  z-index: 1;
   display: inline-flex;
-  grid-column: 3;
-  width: 1rem;
-  height: 1rem;
-  align-items: center;
-  justify-content: center;
-  color: currentcolor;
-}
-
-.swap-amount-secondary__icon svg {
-  width: 1rem;
-  height: 1rem;
 }
 
 .swap-amount-secondary__label {
-  position: relative;
-  z-index: 1;
-  grid-column: 2;
   white-space: nowrap;
 }
 
-.swap-receive-card {
+.swap-pair {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  min-height: 4.25rem;
-  padding: 0.75rem 0.875rem;
-  text-align: left;
-  transition:
-    background-color 160ms ease,
-    transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
-.swap-receive-card > div {
+.swap-pair__row {
+  display: flex;
+  min-height: 4.75rem;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 1.25rem;
+  background: var(--surface);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  --well: var(--bg);
+}
+
+.swap-pair__copy {
   display: flex;
   min-width: 0;
   flex: 1;
@@ -2455,89 +2343,103 @@ html.palette-dark .swap-flip-button {
   gap: 0.125rem;
 }
 
-.swap-receive-card strong {
-  color: var(--ink-2);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  line-height: var(--text-sm-line);
+.swap-pair__copy span,
+.swap-pair__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.swap-receive-card:active,
-.swap-amount-display:active {
-  transform: scale(var(--active-transform-scale));
+.swap-pair__copy span {
+  color: var(--fg);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.375rem;
+}
+
+.swap-pair__copy small {
+  color: var(--ink-3);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.swap-pair__max {
+  min-width: var(--size-touch-min);
+  min-height: var(--size-touch-min);
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: var(--brand-text);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  padding: 0 0.25rem;
+  margin-right: -0.25rem;
+}
+
+.swap-pair__chevron {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.swap-receive-card {
+  transition: background-color var(--press-up) var(--ease-out);
+}
+
+.swap-receive-card:active {
+  background: var(--surface-strong);
+  transition-duration: var(--press-down);
+}
+
+.swap-receive-card strong {
+  color: var(--fg);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .swap-receive-card__empty {
   display: inline-flex;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
   align-items: center;
   justify-content: center;
-  width: 2.25rem;
-  height: 2.25rem;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--neutral-50);
-  color: var(--ink-3);
-  font-size: var(--text-xl);
-  font-weight: 500;
-  line-height: 1;
-}
-
-.swap-flip-button {
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--size-touch-min);
-  height: var(--size-touch-min);
-  margin: -0.5rem 0;
-  border: 0;
   border-radius: 999px;
   background: var(--bg);
-  color: var(--brand-text);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent),
-    0 6px 16px -10px color-mix(in srgb, var(--fg) 28%, transparent);
-  z-index: 1;
+  color: var(--ink-2);
 }
 
-.swap-flip-button svg {
-  width: 1.25rem;
-  height: 1.25rem;
+/* Sits on the seam between the two rows, cut out of them by a ring of page colour */
+.swap-flip-button {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  /* leaves a 12px seam between the rows: (2 × 0.5rem gap + 2.25rem − 0.75rem) / 2 */
+  margin: -1.25rem 0;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--brand-text);
+  box-shadow: 0 0 0 4px var(--bg);
 }
 
 .swap-flip-button:active {
-  transform: scale(var(--active-transform-scale));
+  background: var(--surface-strong);
 }
 
 .swap-flip-button:disabled {
-  opacity: 0.45;
-}
-
-.swap-keypad-shell {
-  display: flex;
-  flex-direction: column;
-  padding: 0.375rem 0 0.25rem;
+  cursor: default;
+  color: var(--ink-4);
 }
 
 .swap-keypad {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.125rem;
-}
-
-.swap-keypad button {
-  min-height: 3.25rem;
-  border-radius: var(--radius-lg);
-  background: transparent;
-  color: var(--fg);
-  font-family: var(--font-family-sans);
-  font-size: var(--text-xl);
-  font-weight: 500;
-}
-
-.swap-keypad button:active {
-  transform: scale(var(--active-transform-scale));
-  background: var(--neutral-50);
+  padding: 0.25rem 0 0;
 }
 
 @keyframes swap-amount-character-in {
@@ -2552,20 +2454,60 @@ html.palette-dark .swap-flip-button {
   }
 }
 
-@media (max-width: 380px) {
+/* Short phones: the figure, the rows and the keys give up some height so the
+ * composer, keypad and Continue stay on one screen. Below 600px there is not
+ * enough of it to share out without crowding, so the screen scrolls instead. */
+@media (max-height: 700px) {
+  .swap-composer {
+    gap: 0.5rem;
+  }
+
+  .swap-figure {
+    min-height: 0;
+    gap: 0.5rem;
+  }
+
   .swap-amount-value {
-    font-size: calc(var(--heading-xl-size) * var(--swap-amount-scale, 1));
-    line-height: var(--heading-xl-line);
+    font-size: calc(3.5rem * var(--swap-amount-scale, 1));
+  }
+
+  .swap-pair__row {
+    min-height: 4.25rem;
+    padding-block: 0.625rem;
+  }
+
+  .swap-flip-button {
+    width: 2rem;
+    height: 2rem;
+    margin: -1.125rem 0;
+    box-shadow: 0 0 0 3px var(--bg);
+  }
+
+  .keypad.swap-keypad button {
+    height: 3rem;
+  }
+}
+
+@media (max-height: 600px) {
+  /* scoped to the lab: the stage rules further down would otherwise win */
+  .asset-swap-lab .swap-flow-stage--compose,
+  .asset-swap-lab .swap-flow-stage--compose .swap-composer,
+  .asset-swap-lab .swap-figure {
+    flex: none;
+  }
+
+  .swap-figure {
+    padding-block: 0.5rem;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .swap-keypad button:active,
-  .swap-token-row:active,
-  .swap-receive-card:active,
-  .swap-amount-secondary:active,
-  .swap-amount-display:active {
+  .swap-token-row:active {
     transform: none;
+  }
+
+  .swap-amount-value {
+    transition: none;
   }
 }
 
@@ -3522,9 +3464,9 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
   padding-bottom: 0.5rem;
 }
 
-/* The compose stage must fit the viewport with no scrolling: the amount card
- * is the flexible element — it grows on tall screens and shrinks on short
- * ones (down to its content) so the keypad and Continue stay on screen. */
+/* The compose stage must fit the viewport with no scrolling: the figure is
+ * the flexible part. It grows on tall screens and gives way on short ones, so
+ * the keypad and Continue stay on screen. */
 .swap-flow-stage--compose {
   flex: 1;
   min-height: 0;
@@ -3535,16 +3477,7 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
   min-height: 0;
 }
 
-.swap-flow-stage--compose .swap-input-card {
-  flex: 1;
-  min-height: 0;
-}
-
 @media (max-height: 700px) {
-  .swap-keypad button {
-    min-height: 2.75rem;
-  }
-
   .asset-swap-content .content-shell {
     padding-top: 0.5rem;
   }
@@ -3636,8 +3569,8 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
   align-items: center;
   min-height: var(--size-touch-lg);
   border-radius: var(--radius-xl);
-  background: var(--neutral-50);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 4%, transparent);
+  /* a well: the surface on the page, one step up on a sheet */
+  background: var(--well, var(--surface));
 }
 
 .swap-search-field span {
@@ -3721,43 +3654,35 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
   height: 100%;
 }
 
-.swap-detail-card,
-.swap-review-card {
-  padding: 1rem;
-}
-
-.swap-detail-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  background: var(--bg);
-}
-
 .swap-metric-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 1rem;
-  min-height: 3.125rem;
-  color: var(--ink-3);
-  font-size: var(--text-sm);
-  font-weight: 400;
-  line-height: 1;
-  border-top: 1px solid color-mix(in srgb, var(--fg) 5%, transparent);
-}
-
-.swap-metric-row:first-child {
-  border-top: 0;
-}
-
-.swap-metric-row span {
   display: flex;
+  min-height: 1.75rem;
   align-items: center;
-  min-height: var(--text-sm-line);
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.9375rem;
+  line-height: 1.25rem;
 }
 
-.swap-metric-row span:first-child {
+.swap-metric-row__label {
+  display: inline-flex;
   min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-3);
+}
+
+.swap-metric-row__label > svg {
+  flex: none;
+}
+
+.swap-metric-row__value {
+  display: inline-flex;
+  justify-content: flex-end;
+  color: var(--fg);
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .swap-rate-label {
@@ -3819,43 +3744,32 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
   transform-origin: left bottom;
 }
 
-.swap-metric-row span:last-child {
-  justify-content: flex-end;
-  color: var(--ink-2);
-  font-weight: 500;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.swap-review-card {
+/* Review reads like Send's: who, how much, then the rows */
+.swap-review {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  padding: 1.125rem;
+  gap: 1.25rem;
+  padding-top: 1.25rem;
 }
 
-.swap-review-card h3 {
-  margin: 0;
-}
-
-.swap-review-hero {
+.swap-review__route {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.875rem;
+  gap: 0.75rem;
 }
 
-.swap-review-hero > div:last-child {
+.swap-review__pair {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+}
+
+.swap-review__rows {
   display: flex;
-  min-width: 0;
   flex-direction: column;
-  gap: 0.125rem;
-}
-
-.swap-review-hero span {
-  color: var(--ink-3);
-  font-size: var(--text-xs);
-  font-weight: 400;
-  line-height: var(--text-xs-line);
+  gap: 0.5rem;
 }
 
 .swap-review-avatars {
@@ -3866,24 +3780,12 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
 
 .swap-review-avatars > * + * {
   margin-left: -0.625rem;
-  box-shadow: 0 0 0 3px var(--bg);
-}
-
-.swap-drawer-content {
-  border-top: 1px solid var(--neutral-100) !important;
-  background: var(--bg) !important;
+  box-shadow: 0 0 0 3px var(--sheet-bg);
 }
 
 .swap-review-drawer-content {
   max-height: min(92dvh, 42rem) !important;
   overflow: hidden;
-}
-
-.swap-review-header {
-  align-items: flex-start !important;
-  gap: 0.25rem !important;
-  padding: 1.25rem 1rem 0.875rem !important;
-  text-align: left !important;
 }
 
 .swap-picker-header {
@@ -3908,21 +3810,6 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
   line-height: var(--text-sm-line);
 }
 
-.swap-review-header [data-slot='drawer-title'] {
-  color: var(--fg);
-  font-family: var(--font-family-heading);
-  font-size: var(--heading-sm-size);
-  font-weight: 500;
-  letter-spacing: var(--heading-sm-tracking);
-  line-height: var(--heading-sm-line);
-}
-
-.swap-review-header [data-slot='drawer-description'] {
-  color: var(--ink-3);
-  font-size: var(--text-sm);
-  line-height: var(--text-sm-line);
-}
-
 .swap-drawer-body {
   display: flex;
   gap: 0.875rem;
@@ -3942,25 +3829,18 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  gap: 0.75rem;
-  padding: 0 1rem 0.75rem;
+  padding: 0 1.25rem;
 }
 
 .swap-review-action {
-  position: sticky;
-  bottom: 0;
-  background: var(--bg);
-  padding: 0.75rem 1rem max(1rem, env(safe-area-inset-bottom));
-  box-shadow: 0 -12px 24px -18px color-mix(in srgb, var(--fg) 22%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 1.125rem 1.25rem 1.25rem;
 }
 
-.swap-confirm-error {
-  margin: 0 0 0.625rem;
-  color: color-mix(in srgb, var(--red-700) 84%, var(--fg));
-  font-size: var(--text-sm);
-  font-weight: 500;
-  line-height: var(--text-sm-line);
-  text-align: center;
+.swap-review-action .error-note {
+  margin-bottom: 0.75rem;
 }
 
 .swap-token-list--page {
@@ -3984,7 +3864,7 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
 
 .swap-token-row--active,
 .swap-token-row:active {
-  background: var(--neutral-50);
+  background: var(--well, var(--surface));
 }
 
 /* press feedback only — the persistent selected state must not stay scaled */

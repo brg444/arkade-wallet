@@ -33,7 +33,9 @@ with grey minor units (`Figure`). Flags and token logos give way to drawn curren
 
 **Home.** No logo, no bottom bar, no Apps entry, no promotions. Scan and Settings sit at the top right; on
 desktop Settings moves to the sidebar and Scan stays. The balance leads, with the month's change and a value
-line when there is history. Receive and Send are the two primary actions. Scrolling collapses the balance
+line when there is history. Receive and Send are the two primary actions, set like the buttons on arkadeos.com:
+the label in Geist Mono capitals and a pixel arrow at the end (`PixelArrow`, a 5×5 grid), Receive outlined in ink and
+Send solid. Accounts and Recent activity open under a 2px rule, and accounts are a ruled list with amounts in mono. Scrolling collapses the balance
 into the header. Activity opens from View all, which is there on an empty wallet too.
 
 **Send.** Close instead of Back. On phones the keypad opens once the recipient resolves and its Continue goes
@@ -47,6 +49,16 @@ the Send flow it no longer owns.
 **Receive.** The requested amount leads, above a plain QR card with no logo. Rails move into an Other formats
 sheet, one radio group covering formats and stablecoins, so Lightning stays in the background until a
 sender's wallet asks for it. Copy and Share are unchanged.
+
+**Swap.** The composer reads like the Send keypad: the figure leads, at the keypad's sizes with grey cents and
+thousands separators, over the keypad's unit chip; a balance limit is said under it, as Send says one. The two
+sides of the trade are flat rows, the asset with its balance and Max, and the asset to receive with its estimate
+(and its value, when that is in another currency); the flip button sits on a 12px seam between them, clear of
+their text. Below 700px tall the composer tightens; below 600px it scrolls rather than crowd. The keypad is the shared one, with no point key for
+whole units. Review is laid out like Send's (the route, what arrives, then Swap, Fees and Rate as rows with
+icons), with an inline error and a Cancel; its title stays as the sheet's accessible name. Success shows what
+was given behind the sheet. The asset list and the receive picker keep their layout; their fields and rows now
+use the sheet's well, so they match the other sheets in dark.
 
 **Everything else.** Every drawer is a floating panel on a scrim. `Modal` is a real dialog: named, Tab stays
 inside it, Escape closes it and focus returns to what opened it. An open sheet or dialog takes Escape before
@@ -159,7 +171,7 @@ fix. pnpm refuses to install if the entry is left behind for a version that is n
 - **No real devices.** Safe areas, haptics, the iOS back gesture, the install flow and camera scanning were
   not exercised on a phone.
 - **Secondary screens were restyled through shared tokens and components, not individually.** The 21 Settings
-  screens, Swap, Notes, the Assets app, Buy or sell and restore inherit the new look; only the Settings menu
+  screens, Notes, the Assets app, Buy or sell and restore inherit the new look; only the Settings menu
   and Theme were reviewed closely in both themes. Expect leftovers there.
 - **Dead styles remain** in `src/index.css` for components that no longer exist.
 - From the migration plan, not started: font preload, manifest shortcuts, deferring the service-worker update
