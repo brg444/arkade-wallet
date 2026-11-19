@@ -25,6 +25,11 @@ import { AssetsProvider } from './providers/assets'
 import { BackupProvider } from './providers/backup'
 import { LanguageProvider } from './providers/language'
 import { reloadOnWorkerTakeover } from './lib/serviceWorkerTakeover'
+import { readWalletFromStorage } from './lib/storage'
+import { warmUpWorker } from './lib/workerWarmUp'
+
+// Before anything else: the worker's chain connection takes longer to come up than the page takes to ask for it.
+warmUpWorker(navigator.serviceWorker, readWalletFromStorage())
 
 // On takeover, not on updatefound: a page reloaded while the new worker still installs boots against the
 // old one, which skipWaiting then retires mid-init, leaving "Connecting to service worker" for the 30s timeout.

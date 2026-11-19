@@ -5,7 +5,8 @@ import {
   MessageBus,
   WalletMessageHandler,
 } from '@arkade-os/sdk'
-import { electrumProvider } from './lib/electrum'
+import { electrumProvider, warmElectrum } from './lib/electrum'
+import { WARM_UP } from './lib/workerWarmUp'
 
 // Health-check ping: responds via MessageChannel so the main thread can
 // detect if this worker is alive before attempting full initialization.
@@ -14,6 +15,13 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   if (event.data?.type === 'PING' && event.ports?.[0]) {
     event.ports[0].postMessage({ type: 'PONG' })
   }
+})
+
+// A page with a stored wallet names its network as soon as it loads (see `warmUpWorker`), well
+// before the wallet's own setup reaches this worker. Opening the chain connection now is what
+// keeps that setup from waiting on it. The bus below gets the same provider when it asks.
+self.addEventListener('message', (event: ExtendableMessageEvent) => {
+  if (event.data?.type === WARM_UP) warmElectrum(event.data.network)
 })
 
 const walletRepository = new IndexedDBWalletRepository()

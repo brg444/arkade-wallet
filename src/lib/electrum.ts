@@ -13,3 +13,12 @@ export const electrumProvider = (network: NetworkName): ElectrumOnchainProvider 
   }
   return provider
 }
+
+/**
+ * Open the connection for `network` ahead of its first use. The value arrives in a message, so
+ * anything that is not a network with an endpoint is ignored rather than passed to a socket.
+ */
+export const warmElectrum = (network: unknown): void => {
+  if (typeof network !== 'string' || !Object.hasOwn(ELECTRUM_WS_URL, network)) return
+  electrumProvider(network as NetworkName)
+}
