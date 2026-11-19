@@ -1,6 +1,6 @@
 import { act, render, waitFor } from '@testing-library/react'
 import { useContext } from 'react'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WalletContext, WalletProvider } from '../../providers/wallet'
 import { AspContext } from '../../providers/asp'
 import { ConfigContext } from '../../providers/config'
@@ -16,6 +16,9 @@ const makeService = () => {
     getVtxoManager: vi.fn().mockResolvedValue({ renewVtxos: async () => {} }),
     getStatus: vi.fn().mockResolvedValue({ walletInitialized: true }),
     getVtxos: vi.fn().mockResolvedValue([]),
+    getActivityHistory: vi.fn().mockResolvedValue([]),
+    getBalance: vi.fn().mockResolvedValue({ total: 0, available: 0, unrolled: 0, assets: [], availableAssets: [] }),
+    assetManager: { getAssetDetails: vi.fn() },
     getContractManager: vi.fn(async () => ({ getSyncState: () => sync.state })),
   }
 }
@@ -73,15 +76,76 @@ it('starts the worker without holding the boot on contract sync', async () => {
   expect(mocks.setup).toHaveBeenCalledWith(expect.objectContaining({ lazyInitialization: true }))
 })
 
-it('reports syncing until the worker finishes its first sync, then reloads', async () => {
-  await startWallet()
-  expect(wallet.syncing).toBe(true)
-  const before = reloads()
-
+const load = () => act(() => wallet.reloadWallet(mocks.current.service as never))
+const syncLands = () => {
   mocks.current.service.sync.state = { lastSyncedAt: Date.now() }
+}
+/** Wait until the provider has looked at the sync state since `since` looks. */
+const looked = async (since: number) =>
+  vi.waitFor(() => expect(mocks.current.service.getContractManager.mock.calls.length).toBeGreaterThan(since), {
+    timeout: 3000,
+  })
 
-  await vi.waitFor(() => expect(wallet.syncing).toBe(false), { timeout: 3000 })
-  await vi.waitFor(() => expect(reloads()).toBe(before + 1), { timeout: 3000 })
+describe('the syncing line', () => {
+  it('stays until a load that started after the first sync has landed', async () => {
+    await startWallet()
+    await load()
+    expect(wallet.syncing).toBe(true)
+    const before = reloads()
+
+    syncLands()
+
+    // Nothing was reading when the sync landed, so a load is started for it.
+    await vi.waitFor(() => expect(wallet.syncing).toBe(false), { timeout: 3000 })
+    expect(reloads()).toBe(before + 1)
+  })
+
+  it('goes with the first load when the sync lands before it, without another', async () => {
+    syncLands()
+    await startWallet()
+    await looked(0)
+    expect(wallet.syncing).toBe(true)
+    const before = reloads()
+
+    await load()
+
+    expect(wallet.syncing).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(reloads()).toBe(before + 1)
+  })
+
+  it('loads once more when the sync lands while a load is reading', async () => {
+    await startWallet()
+    await load()
+    let answer: (coins: never[]) => void = () => {}
+    mocks.current.service.getVtxos.mockReturnValueOnce(new Promise<never[]>((resolve) => (answer = resolve)))
+    const before = reloads()
+    let reading = Promise.resolve()
+    act(() => {
+      reading = wallet.reloadWallet(mocks.current.service as never)
+    })
+
+    const looks = mocks.current.service.getContractManager.mock.calls.length
+    syncLands()
+    await looked(looks)
+    expect(wallet.syncing).toBe(true)
+    answer([])
+    await act(() => reading)
+
+    expect(wallet.syncing).toBe(false)
+    expect(reloads()).toBe(before + 2)
+  })
+
+  it('is looked for straight away, not only on the one-second ping', async () => {
+    await startWallet()
+    await load()
+    const started = performance.now()
+
+    syncLands()
+
+    await vi.waitFor(() => expect(wallet.syncing).toBe(false), { timeout: 3000 })
+    expect(performance.now() - started).toBeLessThan(900)
+  })
 })
 
 it.each(['vtxo_received', 'vtxo_spent'])('reloads when a contract event reports %s', async (eventType) => {

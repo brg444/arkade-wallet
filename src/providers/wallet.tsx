@@ -69,6 +69,10 @@ const SERVICE_WORKER_ACTIVATION_TIMEOUT_MS = 5_000
 const MESSAGE_BUS_INIT_TIMEOUT_MS = 30_000
 const DEV_AUTO_INIT_TIMEOUT_MS = 60_000
 const DEV_INITIAL_DATA_TIMEOUT_MS = 20_000
+// How often, and for how long, a new session looks for the worker's first sync before leaving it to
+// the one-second status ping. A look is one message to the worker.
+const FIRST_SYNC_CHECK_MS = 200
+const FIRST_SYNC_FAST_CHECKS = 50
 const DEV_AUTO_INIT_RELOAD_KEY = 'arkade-dev-auto-init-reload-attempted'
 const ASSET_METADATA_FETCH_CONCURRENCY = 4
 const ASSET_METADATA_FETCH_TIMEOUT_MS = 5_000
@@ -243,6 +247,10 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
   const [vtxoManager, setVtxoManager] = useState<IVtxoManager>()
 
   const hasLoadedOnce = useRef(false)
+  // When this session first saw the worker's boot sync finished, on the page's clock. A load that
+  // starts after it reads what the sync wrote, and is the one that takes the syncing line away.
+  const firstSyncSeenAt = useRef<number | undefined>(undefined)
+  const loadsInFlight = useRef(0)
   const assetMetadataCache = useRef<Map<string, CachedAssetDetails>>(readAssetMetadataFromStorage() ?? new Map())
   const assetMetadataFailures = useRef(readAssetMetadataFailuresFromStorage())
   const assetMetadataFetches = useRef(new Set<string>())
@@ -694,6 +702,9 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     if (!swWallet) return
     const isFirstLoad = !hasLoadedOnce.current
     if (isFirstLoad) setLoadError(null)
+    const startedAt = performance.now()
+    loadsInFlight.current++
+    let readAfterSync = false
     try {
       if (isFirstLoad) setLoadingStatus(t('loading.fetchingCoins'))
       // Asked for together. None of the four needs another's answer and the worker
@@ -759,12 +770,28 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         setLastHomeShown(false)
         setDataReady(true)
       }
+      readAfterSync = firstSyncSeenAt.current !== undefined && startedAt >= firstSyncSeenAt.current
+      if (readAfterSync) setSyncing(false)
       prefetchAssetMetadata(swWallet, referenced).catch((err) => consoleError(err, 'Error prefetching asset metadata'))
     } catch (err) {
       consoleError(err, 'Error reloading wallet')
       if (!hasLoadedOnce.current) {
         setLoadError('Unable to load wallet data. Check your connection and try again.')
       }
+    } finally {
+      loadsInFlight.current--
+    }
+    // The sync finished while this load was reading, so what it drew may be older than the sync.
+    // One more, now, rather than leave the syncing line up until the next coin event.
+    const seen = firstSyncSeenAt.current
+    if (
+      !readAfterSync &&
+      seen !== undefined &&
+      startedAt < seen &&
+      hasLoadedOnce.current &&
+      loadsInFlight.current === 0
+    ) {
+      await reloadWallet(swWallet)
     }
   }
 
@@ -780,6 +807,9 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       setAssetBalances([])
       setAvailableAssetBalances([])
     }
+    // No load will take the syncing line away now, so it goes as it did before when the sync has
+    // already been seen. If it is seen later, the reload that follows clears it.
+    if (firstSyncSeenAt.current !== undefined) setSyncing(false)
     setDataReady(true)
   }
 
@@ -899,6 +929,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       setVtxoManager(vtxoMgr)
       setInitialized(walletInitialized)
       setSyncing(true)
+      firstSyncSeenAt.current = undefined
 
       // Safe on every unlock: watches are keyed by txid and the confirmation queue ignores a key it already holds.
       resumeLnurlConfirmations()
@@ -950,18 +981,33 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       }
 
       // Until the lazy boot's first sync lands the screen shows stored data, and a coin whose status
-      // changed in place (preconfirmed to settled) raises no coin event, so reload once it has landed.
+      // changed in place (preconfirmed to settled) raises no coin event. So the syncing line stays
+      // until a load that started after the sync has drawn what it wrote (see `reloadWallet`).
       let awaitingFirstSync = true
       const checkFirstSync = async () => {
         try {
           const { lastSyncedAt } = (await svcWallet.getContractManager()).getSyncState()
-          if (!lastSyncedAt || signal.aborted) return
+          if (!lastSyncedAt || signal.aborted || !awaitingFirstSync) return
           awaitingFirstSync = false
-          setSyncing(false)
-          scheduleReload()
+          firstSyncSeenAt.current = performance.now()
+          // Before the first load, which starts after this and clears the line itself. During a
+          // load, it reloads once more when it lands. Otherwise nothing will come by itself.
+          if (hasLoadedOnce.current && loadsInFlight.current === 0) {
+            clearTimeout(reloadTimerRef.current)
+            reloadWallet(svcWallet).catch(consoleError)
+          }
         } catch (err) {
           consoleError(err, 'Error reading contract sync state')
         }
+      }
+      // Looked for straight away and then often, not only on the one-second ping below: the sync
+      // usually lands while the worker is still answering setup, and the line should not outlast it
+      // by up to a second. The ping keeps looking if it takes longer than this.
+      const firstSyncWatch = { checks: 0 }
+      const watchFirstSync = async () => {
+        if (signal.aborted || !awaitingFirstSync || firstSyncWatch.checks++ >= FIRST_SYNC_FAST_CHECKS) return
+        await checkFirstSync()
+        if (awaitingFirstSync && !signal.aborted) setTimeout(watchFirstSync, FIRST_SYNC_CHECK_MS)
       }
 
       if (swMessageHandlerRef.current) {
@@ -999,6 +1045,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
           pingInProgress = false
         }
       }, 1_000)
+      watchFirstSync().catch(consoleError)
 
       // Renew expiring coins on startup (non-delegate mode only).
       // When delegation is enabled, the SDK's VtxoManager auto-delegates
