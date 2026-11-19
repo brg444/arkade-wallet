@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import Button from '../../../components/Button'
 import Padded from '../../../components/Padded'
 import QrCode from '../../../components/QrCode'
@@ -19,6 +19,7 @@ import { encodeBip21, encodeBip21Asset } from '../../../lib/bip21'
 import { unitsToAtomic } from '../../../lib/assets'
 import ErrorMessage from '../../../components/Error'
 import { getReceivingAddresses } from '../../../lib/asp'
+import { boardingOutpoints, newBoardingCoins } from '../../../lib/receivedBoarding'
 import { extractError } from '../../../lib/error'
 import InputAmount from '../../../components/InputAmount'
 import Keyboard, { KeyboardInputMode } from '../../../components/Keyboard'
@@ -287,11 +288,22 @@ export default function ReceiveQRCode() {
             : [rows.bip21, rows.ark, rows.btc, rows.invoice, rows.lnaddress]
   ).filter((row) => row.value)
 
+  // The boarding coins held when this screen opened, so an update that only repeats them is no payment.
+  const boardingSeen = useRef<Promise<Set<string> | undefined>>(Promise.resolve(undefined))
+
   // Payment listener
   useEffect(() => {
     if (!svcWallet) return
 
-    const listenForPayments = (event: MessageEvent) => {
+    boardingSeen.current = svcWallet
+      .getBoardingUtxos()
+      .then(boardingOutpoints)
+      .catch((err) => {
+        consoleError(err, 'Error reading boarding coins')
+        return undefined
+      })
+
+    const listenForPayments = async (event: MessageEvent) => {
       let sats = 0
       let receivedAssets: Asset[] = []
 
@@ -320,7 +332,11 @@ export default function ReceiveQRCode() {
       if (event.data && event.data.type === 'UTXO_UPDATE') {
         const coins = event.data.payload?.coins
         if (Array.isArray(coins)) {
-          sats = (coins as Coin[]).reduce((acc, v) => acc + v.value, 0)
+          // One update at a time against the set, so two arriving together cannot both count a coin.
+          const counted = boardingSeen.current.then((seen) => newBoardingCoins(seen, coins as Coin[]))
+          boardingSeen.current = counted.then(({ seen }) => seen)
+          const { fresh } = await counted
+          sats = fresh.reduce((acc, v) => acc + v.value, 0)
         } else {
           consoleError('UTXO_UPDATE message has unexpected payload shape:', event.data.payload)
         }

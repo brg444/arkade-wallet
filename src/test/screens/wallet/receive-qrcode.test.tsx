@@ -499,6 +499,51 @@ describe('Receive QR Code screen', () => {
   })
 })
 
+describe('Receive QR Code screen — a boarding payment', () => {
+  const held = { txid: 'a'.repeat(64), vout: 0, value: 20_000 }
+  const arriving = { txid: 'b'.repeat(64), vout: 1, value: 7_000 }
+
+  const deliver = async (coins: (typeof held)[]) => {
+    const listeners = vi
+      .mocked(navigator.serviceWorker.addEventListener)
+      .mock.calls.filter(([type]) => type === 'message')
+      .map(([, listener]) => listener as (event: MessageEvent) => Promise<void> | void)
+    await act(async () => {
+      await Promise.all(
+        listeners.map((listen) => listen({ data: { type: 'UTXO_UPDATE', payload: { coins } } } as MessageEvent)),
+      )
+    })
+  }
+
+  beforeEach(() => vi.mocked(navigator.serviceWorker.addEventListener).mockClear())
+
+  it('is not announced for a coin the wallet already held', async () => {
+    const setRecvInfo = vi.fn()
+    renderReceiveQrCode({
+      ...tapFixture(),
+      flow: { ...tapFixture().flow, setRecvInfo },
+      wallet: { svcWallet: { ...mockSvcWallet, getBoardingUtxos: async () => [held] } as any },
+    })
+
+    await deliver([held])
+
+    expect(setRecvInfo).not.toHaveBeenCalledWith(expect.objectContaining({ received: true }))
+  })
+
+  it('is announced for the new coin alone, not the ones beside it', async () => {
+    const setRecvInfo = vi.fn()
+    renderReceiveQrCode({
+      ...tapFixture(),
+      flow: { ...tapFixture().flow, setRecvInfo },
+      wallet: { svcWallet: { ...mockSvcWallet, getBoardingUtxos: async () => [held] } as any },
+    })
+
+    await deliver([held, arriving])
+
+    expect(setRecvInfo).toHaveBeenCalledWith(expect.objectContaining({ received: true, satoshis: 7_000 }))
+  })
+})
+
 describe('Receive QR Code screen — copy feedback', () => {
   beforeEach(() => {
     copyToClipboardMock.mockClear()
