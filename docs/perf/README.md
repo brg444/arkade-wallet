@@ -20,6 +20,7 @@ onto the 0.5.6 build, ESM and CJS, written by `patch-sdk3.py` in `.verify/perf/t
 | Exit data is asked for 50 transactions to a request and asked again by name for anything left out; a full exit capture records nothing until it has every transaction | Fix | `fix/vtxo-paging-clamped-page`, `e5b9b1e1` |
 | No 500 ms pause between pages of coins | Performance | `perf/coin-sync`, `683146e8` |
 | The check for coins under a deprecated signer reads only the contracts under such a signer | Performance | `perf/coin-sync`, `1d8304ff` |
+| A lazy boot leaves the onchain sync behind it; a failed lazy boarding refresh is retried | Performance | `perf/lazy-boot`, `b3479ed0` |
 
 The wallet does not capture or estimate exits today, so the second row changes nothing it does; it is carried
 so that the patch and the SDK branch say the same thing.
@@ -208,39 +209,74 @@ start, the `/v1/info` the swap client waits for took 0.4 to 0.5 s instead of 0.1
 connection. Requests here leave through a proxy that opens connections its own way, and a phone that talks
 to the server directly may not pay this. It has not been checked on one.
 
+## The syncing line and the chain round trips
+
+Two more changes, measured the same way: sixteen returning visits per cell, the two builds taking turns.
+
+**The syncing line goes with the first load after the sync** (`d25693c`). It was cleared by a one-second
+ping and a reload a second later, so it outlasted the sync by up to a second, and for that second the
+figures beside it could predate the sync. The session now looks for the sync at once and every 200 ms, and
+the line goes when a load that started after the sync has drawn what it wrote.
+
+**Boarding coins load in the background, and so does the onchain sync** (`7b92061`, `5faced4`, SDK
+`b3479ed0`). The wallet now uses the SDK's `lazyBoarding`, which it had turned down for two reasons, both
+now dealt with: a failed refresh is retried, and Receive counts only coins an update adds, since the update
+lists every boarding coin held. Under `lazyInitialization` the SDK also no longer waits for its onchain
+sync. Until the boarding coins are in, the syncing line stays up.
+
+| Returning visit, typical wallet | Before both | Syncing line change | Both |
+| --- | --- | --- | --- |
+| Worker stopped: wallet loaded | 1.83 s | 1.78 s | 0.96 s (0.90 to 1.26) |
+| Worker stopped: syncing line gone | 2.28 s | 1.78 s | 1.25 s (1.08 to 1.35) |
+| Worker running: wallet loaded | 1.38 s | 1.32 s | 0.93 s (0.87 to 1.12) |
+| Worker running: syncing line gone | 2.09 s | 1.32 s | 1.12 s (1.06 to 1.44) |
+
+| Returning visit, heavy wallet | Before both | Syncing line change | Both |
+| --- | --- | --- | --- |
+| Worker stopped: wallet loaded | 2.00 s | 1.94 s | 1.11 s (0.99 to 2.40) |
+| Worker stopped: syncing line gone | 2.40 s | 1.94 s | 1.58 s (1.29 to 2.60) |
+| Worker running: wallet loaded | 1.75 s | 1.57 s | 1.09 s (0.95 to 1.34) |
+| Worker running: syncing line gone | 2.34 s | 1.57 s | 1.39 s (1.26 to 1.74) |
+
+Each column pair comes from its own session, so the middle column appears twice with slightly different
+figures; the table takes it from the later one. Both builds ended every visit on the same balance. No
+boarding payment has been made against this build; the unit tests cover the retry, the update and Receive.
+
+## The bundle, measured and set aside
+
+All screens together are 189 KB of the 2.9 MB bundle; the SDK, the swap package and their cryptography
+are most of the rest, and the boot path needs them. Loading Settings, Swap, Apps, notes, the coin list and
+the scanner on demand took the main file from 2,900 KB to 2,768 KB (930 to 891 KB compressed). With the
+page's CPU slowed four times, sixteen visits each, Home appeared at 0.34 s before and 0.38 s after, and the
+wallet loaded at 2.48 s and 2.41 s: no difference. The change is not committed; its diff is in
+`.verify/perf/parked/`.
+
+What that run did show: with the page's CPU slowed four times the wallet loads in 2.4 s instead of 1.0 s,
+so on a slower phone the page's own work, not the network, is most of the wait. Deriving the seed twice
+and decrypting the stored secret twice (below) is the first place to look.
+
 ## What the load still waits for
 
-Largest first, for the typical wallet with the worker stopped, out of about 1.8 s.
+For the typical wallet with the worker stopped, out of about 1.0 s, largest first.
 
-- **Five round trips to the chain, 0.5 s.** Setup makes four of them one after the other (the coins of
-  every onchain address, the watch on them, the boarding coins again, the incoming-funds subscription), and
-  each reload makes one for the balance. All five are about boarding coins. The SDK has an option that
-  takes them off the path, `lazyBoarding`, and the wallet deliberately does not use it, for two reasons
-  noted beside the setup call: its refresh is never retried, and its update message carries every stored
-  coin, which the receive screen reads as a payment. Reading the SDK adds a third: with the option on, the
-  history cache is written only after that refresh. Mending this is work in the SDK's worker message
-  handler, which upstream has changed heavily since the version this wallet pins. It is the largest step
-  left and it needs a decision before any code.
-- **The page before it calls the worker, 0.36 s.** The stored secret is decrypted twice, once to learn that
-  there is no password and once to unlock, and the recovery phrase is stretched into a seed twice, once for
-  the identity and once for the backup key. Here that is about 0.05 s for each decryption and 0.12 s for
-  the two seeds together, and a slow phone takes several times as long. Left alone for now: it is
-  key-handling code, and the gain on this machine is small.
+- **The page before it calls the worker, about 0.36 s on this machine and much more on a slow one.** The
+  stored secret is decrypted twice, once to learn that there is no password and once to unlock, and the
+  recovery phrase is stretched into a seed twice, once for the identity and once for the backup key. Left
+  alone so far because it is key-handling code.
 - **Server info in the worker, 0.25 to 0.35 s.** It lasts as long as `/v1/delegator/info`, which is on a host
-  nothing has connected to yet. A preconnect from the page might shorten it on a phone. It cannot be
-  measured through this machine's proxy, so it is not done.
+  nothing has connected to yet. A preconnect from the page might shorten it on a phone; it cannot be
+  measured through this machine's proxy.
 - **The swap client's `/v1/info`, 0.15 to 0.2 s.** The worker read the same thing a second earlier. The parked
   operator-info memo would answer it, once reads that must be live go around the memo.
-- **The half second in the Electrum client, 0.1 s of it.** A worker takes 0.08 s to start and the socket
-  0.19 s to open, so even opened first the connection is ready a little after setup wants it.
-- **A worker that is still running rebuilds its wallet, 0.8 s of that visit's 1.35 s.** This is the less
-  common visit, and the fix is in the SDK's worker lifecycle.
+- **A worker that is still running rebuilds its wallet.** This is the less common visit, and the fix is in the
+  SDK's worker lifecycle.
 
 ## Not done yet
 
-- Wallet: the syncing line is cleared by a one-second poll of the worker, and a reload follows a second
-  later. One coherent snapshot per sync, as the review asks, replaces both.
-- Wallet: split the 2.8 MB bundle.
+- Wallet: one coherent snapshot per sync, as the review asks. The syncing line now goes with the first
+  load after the sync, but loads still read the worker's state in several requests.
+- A boarding payment against this build, on the test network and then on mainnet (see
+  `docs/deploy/railway.md`).
 - SDK: restore reads the full history twice (at boot, then after the address scan).
 - A question for the Operator: the request limit per address on `/v1/indexer/*`. Without the pause a large
   wallet sends its page requests back to back, and whether mainnet's ingress tolerates that cannot be tested
