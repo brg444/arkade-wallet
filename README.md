@@ -73,6 +73,14 @@ docker run -p 8080:80 \
 
 See the [Environment Variables](#environment-variables) table for all supported variables.
 
+The container also reads these at start:
+
+| Variable | Effect |
+| --- | --- |
+| `PORT` | The port nginx listens on, for hosts that route to the port they assign. Defaults to 80. |
+| `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD` | When both are set, every request needs them, as `functions/_middleware.ts` does on Cloudflare Pages. |
+| `DISABLE_ANALYTICS` | `true` removes the Plausible tag, so a test deployment does not report page views as arkade.money's. |
+
 ### Build locally
 
 ```bash
