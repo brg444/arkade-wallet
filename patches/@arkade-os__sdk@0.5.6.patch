@@ -129,7 +129,7 @@ index 51c8d78dc9a93d9a6f62e803871874f97c6241df..34e4ec038e0a7610087442fb6e8596e0
      return result;
    };
 diff --git a/dist/chunk-Y3CDDPWI.cjs b/dist/chunk-Y3CDDPWI.cjs
-index 4370998ea257617b3f3c513267d7805d602c296d..c3f1b7339c91c48987f741e4a73d9354470e7a4e 100644
+index 4370998ea257617b3f3c513267d7805d602c296d..c981c90ba456c2421823056241d8dee9f9d2fc86 100644
 --- a/dist/chunk-Y3CDDPWI.cjs
 +++ b/dist/chunk-Y3CDDPWI.cjs
 @@ -6238,8 +6238,14 @@ var VtxoManager = class _VtxoManager {
@@ -228,8 +228,51 @@ index 4370998ea257617b3f3c513267d7805d602c296d..c3f1b7339c91c48987f741e4a73d9354
      }
      return out;
    }
+@@ -15734,11 +15756,10 @@ var ReadonlyWallet = class _ReadonlyWallet {
+     } catch (e) {
+       console.warn("Legacy utxos migration failed; retrying next boot", e);
+     }
+-    try {
+-      await manager.syncOnchain();
+-    } catch (e) {
++    const onchainSync = manager.syncOnchain().catch((e) => {
+       console.warn("Onchain contract sync failed; continuing with stored coins", e);
+-    }
++    });
++    if (!this.lazyInitialization) await onchainSync;
+     return manager;
+   }
+   /** Dispose wallet-owned managers and release background resources. */
+@@ -20125,6 +20146,7 @@ var DelegateNotConfiguredError = class extends Error {
+   }
+ };
+ var DEFAULT_MESSAGE_TAG = "WALLET_UPDATER";
++var LAZY_BOARDING_RETRY_MS = [1e3, 3e3, 1e4, 3e4, 6e4];
+ function unsupportedByManager(method) {
+   return new Error(`Contract manager does not support ${method}`);
+ }
+@@ -21210,7 +21232,18 @@ var WalletMessageHandler = class {
+     if (opts?.lazyBoarding) {
+       const emitter = this.newEmitter("boarding");
+       void (async () => {
+-        await this.refreshBoardingCache(emitter);
++        for (let attempt = 0; ; attempt++) {
++          try {
++            await this.refreshBoardingCache(emitter);
++            break;
++          } catch (error) {
++            if (emitter.stale) return;
++            const wait = LAZY_BOARDING_RETRY_MS[Math.min(attempt, LAZY_BOARDING_RETRY_MS.length - 1)];
++            console.warn(`[wallet] boarding refresh failed, retrying in ${wait / 1e3}s`, error);
++            await new Promise((resolve) => setTimeout(resolve, wait));
++            if (emitter.stale) return;
++          }
++        }
+         if (emitter.stale) return;
+         this.boardingLoaded = true;
+         const coins = await this.readonlyWallet?.getStoredBoardingUtxos?.() ?? [];
 diff --git a/dist/chunk-YKT4NAQG.js b/dist/chunk-YKT4NAQG.js
-index 9cc17c001f4a564118ef0ec2b87b49caf2fd0b09..008f262538e7681c8d6bbc8c5dfbd832aa5ab7cf 100644
+index 9cc17c001f4a564118ef0ec2b87b49caf2fd0b09..d59365bd56ec83cd83210b44630cc194ea08ba04 100644
 --- a/dist/chunk-YKT4NAQG.js
 +++ b/dist/chunk-YKT4NAQG.js
 @@ -6216,8 +6216,14 @@ var VtxoManager = class _VtxoManager {
@@ -328,3 +371,46 @@ index 9cc17c001f4a564118ef0ec2b87b49caf2fd0b09..008f262538e7681c8d6bbc8c5dfbd832
      }
      return out;
    }
+@@ -15712,11 +15734,10 @@ var ReadonlyWallet = class _ReadonlyWallet {
+     } catch (e) {
+       console.warn("Legacy utxos migration failed; retrying next boot", e);
+     }
+-    try {
+-      await manager.syncOnchain();
+-    } catch (e) {
++    const onchainSync = manager.syncOnchain().catch((e) => {
+       console.warn("Onchain contract sync failed; continuing with stored coins", e);
+-    }
++    });
++    if (!this.lazyInitialization) await onchainSync;
+     return manager;
+   }
+   /** Dispose wallet-owned managers and release background resources. */
+@@ -20103,6 +20124,7 @@ var DelegateNotConfiguredError = class extends Error {
+   }
+ };
+ var DEFAULT_MESSAGE_TAG = "WALLET_UPDATER";
++var LAZY_BOARDING_RETRY_MS = [1e3, 3e3, 1e4, 3e4, 6e4];
+ function unsupportedByManager(method) {
+   return new Error(`Contract manager does not support ${method}`);
+ }
+@@ -21188,7 +21210,18 @@ var WalletMessageHandler = class {
+     if (opts?.lazyBoarding) {
+       const emitter = this.newEmitter("boarding");
+       void (async () => {
+-        await this.refreshBoardingCache(emitter);
++        for (let attempt = 0; ; attempt++) {
++          try {
++            await this.refreshBoardingCache(emitter);
++            break;
++          } catch (error) {
++            if (emitter.stale) return;
++            const wait = LAZY_BOARDING_RETRY_MS[Math.min(attempt, LAZY_BOARDING_RETRY_MS.length - 1)];
++            console.warn(`[wallet] boarding refresh failed, retrying in ${wait / 1e3}s`, error);
++            await new Promise((resolve) => setTimeout(resolve, wait));
++            if (emitter.stale) return;
++          }
++        }
+         if (emitter.stale) return;
+         this.boardingLoaded = true;
+         const coins = await this.readonlyWallet?.getStoredBoardingUtxos?.() ?? [];

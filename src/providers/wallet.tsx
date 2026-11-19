@@ -251,6 +251,9 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
   // starts after it reads what the sync wrote, and is the one that takes the syncing line away.
   const firstSyncSeenAt = useRef<number | undefined>(undefined)
   const loadsInFlight = useRef(0)
+  // Whether the last load had the boarding coins. The worker refreshes them in the background, and
+  // until it has, the balance it reports holds only the ones stored on the last visit.
+  const boardingLoaded = useRef(true)
   const assetMetadataCache = useRef<Map<string, CachedAssetDetails>>(readAssetMetadataFromStorage() ?? new Map())
   const assetMetadataFailures = useRef(readAssetMetadataFailuresFromStorage())
   const assetMetadataFetches = useRef(new Set<string>())
@@ -771,7 +774,8 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         setDataReady(true)
       }
       readAfterSync = firstSyncSeenAt.current !== undefined && startedAt >= firstSyncSeenAt.current
-      if (readAfterSync) setSyncing(false)
+      boardingLoaded.current = funds.boarding?.loaded !== false
+      if (readAfterSync && boardingLoaded.current) setSyncing(false)
       prefetchAssetMetadata(swWallet, referenced).catch((err) => consoleError(err, 'Error prefetching asset metadata'))
     } catch (err) {
       consoleError(err, 'Error reloading wallet')
@@ -866,9 +870,11 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         arkServer: { url: arkServerUrl },
         delegateUrl,
         walletMode: walletMode ?? config.walletMode ?? 'static',
-        // Contract sync finishes in the background; the coin-event reload below repaints. Not lazyBoarding: its
-        // refresh is never retried, and its UTXO_UPDATE carries every stored coin, which the receive screen reads as a payment.
+        // Contract sync, the boarding refresh and the incoming-funds subscription all finish in the background,
+        // and the coin-event reload below repaints. The worker retries a boarding refresh that fails, and Receive
+        // counts only coins an update adds (see `newBoardingCoins`), since the refresh's update lists every one.
         lazyInitialization: true,
+        lazyBoarding: true,
         storage: { walletRepository, contractRepository },
         serviceWorkerActivationTimeoutMs: SERVICE_WORKER_ACTIVATION_TIMEOUT_MS,
         messageBusTimeoutMs: MESSAGE_BUS_INIT_TIMEOUT_MS,
@@ -930,6 +936,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       setInitialized(walletInitialized)
       setSyncing(true)
       firstSyncSeenAt.current = undefined
+      boardingLoaded.current = true
 
       // Safe on every unlock: watches are keyed by txid and the confirmation queue ignores a key it already holds.
       resumeLnurlConfirmations()
@@ -975,7 +982,19 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         // A lazy boot's first sync can land before VTXO_UPDATE's worker listener exists; CONTRACT_EVENT's is set up first.
         const coinEvent = type === 'CONTRACT_EVENT' && ['vtxo_received', 'vtxo_spent'].includes(payload?.event?.type)
         if (coinEvent || ['VTXO_UPDATE', 'UTXO_UPDATE'].includes(type)) {
-          scheduleReload()
+          // The background boarding refresh ends with a UTXO_UPDATE, and the syncing line waits for
+          // it: read it now rather than after the debounce. The worker stored the coins before saying so.
+          if (
+            type === 'UTXO_UPDATE' &&
+            hasLoadedOnce.current &&
+            !boardingLoaded.current &&
+            loadsInFlight.current === 0
+          ) {
+            clearTimeout(reloadTimerRef.current)
+            reloadWallet(svcWallet).catch(consoleError)
+          } else {
+            scheduleReload()
+          }
           lnurlResyncRef.current?.onPayment()
         }
       }

@@ -70,10 +70,10 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
-it('starts the worker without holding the boot on contract sync', async () => {
+it('starts the worker without holding the boot on contract sync or boarding coins', async () => {
   await startWallet()
 
-  expect(mocks.setup).toHaveBeenCalledWith(expect.objectContaining({ lazyInitialization: true }))
+  expect(mocks.setup).toHaveBeenCalledWith(expect.objectContaining({ lazyInitialization: true, lazyBoarding: true }))
 })
 
 const load = () => act(() => wallet.reloadWallet(mocks.current.service as never))
@@ -134,6 +134,37 @@ describe('the syncing line', () => {
 
     expect(wallet.syncing).toBe(false)
     expect(reloads()).toBe(before + 2)
+  })
+
+  it('waits for the boarding coins the worker loads in the background, and reads them as soon as they come', async () => {
+    const service = mocks.current.service
+    const balance = (loaded: boolean) => ({
+      total: 0,
+      available: 0,
+      unrolled: 0,
+      assets: [],
+      availableAssets: [],
+      boarding: { loaded },
+    })
+    service.getBalance.mockResolvedValue(balance(false))
+    syncLands()
+    await startWallet()
+    await looked(0)
+    await load()
+    expect(wallet.syncing).toBe(true)
+    const before = reloads()
+
+    service.getBalance.mockResolvedValue(balance(true))
+    const onMessage = vi
+      .mocked(navigator.serviceWorker.addEventListener)
+      .mock.calls.filter(([type]) => type === 'message')
+      .at(-1)![1] as (event: MessageEvent) => void
+    const started = performance.now()
+    onMessage({ data: { type: 'UTXO_UPDATE', payload: { coins: [] } } } as MessageEvent)
+
+    await vi.waitFor(() => expect(wallet.syncing).toBe(false), { timeout: 3000 })
+    expect(performance.now() - started).toBeLessThan(900)
+    expect(reloads()).toBe(before + 1)
   })
 
   it('is looked for straight away, not only on the one-second ping', async () => {
