@@ -128,9 +128,12 @@ running, which is the less common case.
 
 What keeps the stored figures honest:
 
-- A snapshot is read only by its own wallet, on its own server, by the build that wrote it. It is written
-  after a completed load. A reset stops the writing before it wipes, and the wipe takes the snapshot with
-  everything else in storage. The first visit after an update therefore loads as it did before.
+- A snapshot is read only by its own wallet, on its own server, and only in the shape it was written in
+  (`HOME_SNAPSHOT_SHAPE`, bumped whenever the snapshot or a history row changes shape). It is written after
+  a completed load. A reset stops the writing before it wipes, and the wipe takes the snapshot with
+  everything else in storage. Keyed on the shape rather than the build, it outlives a deploy, so the first
+  visit after one still opens on Home. The server info snapshot stays keyed on the build: it feeds fees and
+  limits, not just what is drawn.
 - A locked wallet shows nothing. Home is drawn once the password has been accepted.
 - Until the load lands, Home is the only wallet screen shown. A tap that navigates is kept and takes
   effect then, so Send, Receive, Activity and Settings never open on a wallet that has not loaded.
