@@ -13,6 +13,8 @@ interface PredictChartProps {
   nowSec: number
   /** Seconds of history before the window opens. */
   lead?: number
+  /** Mark where the window opens, in place of the start time. */
+  showOpen?: boolean
 }
 
 const PAD_TOP = 10
@@ -24,7 +26,15 @@ const TAG_W = 96
  * to its close. The side that wins is tinted, the time still to run is shaded,
  * and the close is a dashed rule at the right edge.
  */
-export default function PredictChart({ samples, lineCents, expiry, kind, nowSec, lead = 60 }: PredictChartProps) {
+export default function PredictChart({
+  samples,
+  lineCents,
+  expiry,
+  kind,
+  nowSec,
+  lead = 60,
+  showOpen = false,
+}: PredictChartProps) {
   const { t } = useTranslation()
   const box = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
@@ -44,14 +54,14 @@ export default function PredictChart({ samples, lineCents, expiry, kind, nowSec,
   const end = Math.max(expiry, nowSec + 1)
   const shown = samples.filter((s) => s.time >= start && s.time <= end)
   const { w, h } = size
-  const ready = w > 0 && h > 0 && shown.length >= 2 && lineCents != null
+  const ready = w > 0 && h > 0 && shown.length >= 2
 
   let body: JSX.Element | null = null
   if (ready) {
-    const prices = shown.map((s) => s.priceCents).concat(lineCents)
+    const prices = shown.map((s) => s.priceCents).concat(lineCents ?? [])
     let lo = Math.min(...prices)
     let hi = Math.max(...prices)
-    const floor = lineCents * 0.0004
+    const floor = (lineCents ?? shown[0]!.priceCents) * 0.0004
     if (hi - lo < floor) {
       const mid = (hi + lo) / 2
       lo = mid - floor / 2
@@ -67,34 +77,50 @@ export default function PredictChart({ samples, lineCents, expiry, kind, nowSec,
     const last = shown[shown.length - 1]!
     const lx = x(last.time)
     const ly = y(last.priceCents)
-    const lineY = y(lineCents)
+    const lineY = lineCents != null ? y(lineCents) : null
     const nowX = Math.min(w, Math.max(0, x(nowSec)))
-    const tagY = Math.min(bottom - 11, Math.max(PAD_TOP + 11, lineY))
+    const tagY = lineY != null ? Math.min(bottom - 11, Math.max(PAD_TOP + 11, lineY)) : 0
+    const opens = expiry - 300
+    const openX = x(opens)
+    const markOpen = showOpen && openX > 0 && openX < w - 40
 
     body = (
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden='true'>
-        <rect
-          className='predict-chart__win'
-          x={0}
-          y={kind === 2 ? PAD_TOP : lineY}
-          width={w}
-          height={Math.max(0, kind === 2 ? lineY - PAD_TOP : bottom - lineY)}
-        />
+        {lineY != null ? (
+          <rect
+            className='predict-chart__win'
+            x={0}
+            y={kind === 2 ? PAD_TOP : lineY}
+            width={w}
+            height={Math.max(0, kind === 2 ? lineY - PAD_TOP : bottom - lineY)}
+          />
+        ) : null}
         {nowX < w ? (
           <rect className='predict-chart__ahead' x={nowX} y={PAD_TOP} width={w - nowX} height={bottom - PAD_TOP} />
         ) : null}
-        <line className='predict-chart__line' x1={0} x2={w} y1={lineY} y2={lineY} />
+        {lineY != null ? <line className='predict-chart__line' x1={0} x2={w} y1={lineY} y2={lineY} /> : null}
         <line className='predict-chart__close' x1={w - 0.5} x2={w - 0.5} y1={PAD_TOP} y2={bottom} />
+        {markOpen ? <line className='predict-chart__open' x1={openX} x2={openX} y1={PAD_TOP} y2={bottom} /> : null}
         <path className='predict-chart__price' d={path} />
         <circle className='predict-chart__halo' cx={lx} cy={ly} r={9} />
         <circle className='predict-chart__dot' cx={lx} cy={ly} r={4.5} />
-        <rect className='predict-chart__tag' x={w - TAG_W - 6} y={tagY - 11} width={TAG_W} height={22} rx={6} />
-        <text className='predict-chart__tag-text' x={w - TAG_W / 2 - 6} y={tagY + 4} textAnchor='middle'>
-          {usdFromCents(lineCents)}
-        </text>
-        <text className='predict-chart__axis' x={0} y={h - 8}>
-          {formatClockTime(start)}
-        </text>
+        {lineCents != null ? (
+          <>
+            <rect className='predict-chart__tag' x={w - TAG_W - 6} y={tagY - 11} width={TAG_W} height={22} rx={6} />
+            <text className='predict-chart__tag-text' x={w - TAG_W / 2 - 6} y={tagY + 4} textAnchor='middle'>
+              {usdFromCents(lineCents)}
+            </text>
+          </>
+        ) : null}
+        {markOpen ? (
+          <text className='predict-chart__axis' x={openX} y={h - 8} textAnchor={openX < 60 ? 'start' : 'middle'}>
+            {t('predict.openAxis', { time: formatClockTime(opens) })}
+          </text>
+        ) : (
+          <text className='predict-chart__axis' x={0} y={h - 8}>
+            {formatClockTime(start)}
+          </text>
+        )}
         <text className='predict-chart__axis' x={w} y={h - 8} textAnchor='end'>
           {t('predict.closeAxis', { time: formatClockTime(expiry) })}
         </text>

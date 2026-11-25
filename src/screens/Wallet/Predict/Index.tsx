@@ -11,7 +11,7 @@ import Glyph from '../../../icons/Glyph'
 import { usePredict } from '../../../hooks/usePredict'
 import { prettyNumber, toSatoshis } from '../../../lib/format'
 import { hapticLight, hapticSubtle } from '../../../lib/haptics'
-import { BEACON_READ_FEE, type PredictKind } from '../../../lib/predict/constants'
+import { BEACON_READ_FEE, PREDICT_LOCK_S, PREDICT_MIN_LEFT_S, type PredictKind } from '../../../lib/predict/constants'
 import { formatCountdown, predictPayout, usdFromCents, windowOpen } from '../../../lib/predict/pricing'
 import { FiatContext } from '../../../providers/fiat'
 import { useTranslation } from '../../../providers/language'
@@ -41,7 +41,6 @@ export default function Predict() {
     setSelectedExpiry,
     lineCents,
     lineOfficial,
-    secondsToClose,
     higherMultiplier,
     lowerMultiplier,
     positions,
@@ -87,20 +86,27 @@ export default function Predict() {
     return gross - BEACON_READ_FEE > stakeSats ? gross - BEACON_READ_FEE : null
   }, [multiplier, stakeSats])
 
-  const lineReady = config.demoMode || lineOfficial
-  const canReview = Boolean(lineCents && lineReady && selectedExpiry && estimate != null && !stakeError)
-
-  const gapCents = market && lineCents ? market.priceCents - lineCents : null
+  // A window opens five minutes before its close and takes entries until two minutes before it.
   const opensAt = selectedExpiry ? windowOpen(selectedExpiry) : 0
+  const enterBy = selectedExpiry - PREDICT_LOCK_S - PREDICT_MIN_LEFT_S
+  const windowState: 'upcoming' | 'setting' | 'open' = nowSec < opensAt ? 'upcoming' : lineOfficial ? 'open' : 'setting'
+
+  // Demo quotes are simulated, so once a window is open they do not wait for its official line.
+  const takesEntries = windowState === 'open' || (config.demoMode && windowState === 'setting')
+  const canReview = Boolean(takesEntries && lineCents && selectedExpiry && estimate != null && !stakeError)
+
+  const gapCents = market && lineCents && lineOfficial ? market.priceCents - lineCents : null
   const status = !market
     ? t('predict.loadingMarket')
-    : !lineOfficial
-      ? t('predict.lineSetsAt', { time: formatClockTime(opensAt) })
-      : gapCents == null || gapCents === 0
-        ? t('predict.marketFlat')
-        : gapCents > 0
-          ? t('predict.marketAbove', { gap: formatGap(gapCents) })
-          : t('predict.marketBelow', { gap: formatGap(gapCents) })
+    : windowState === 'upcoming'
+      ? t('predict.upcomingStatus', { time: formatClockTime(opensAt) })
+      : windowState === 'setting'
+        ? t('predict.settingLine')
+        : gapCents == null || gapCents === 0
+          ? t('predict.marketFlat')
+          : gapCents > 0
+            ? t('predict.marketAbove', { gap: formatGap(gapCents) })
+            : t('predict.marketBelow', { gap: formatGap(gapCents) })
 
   const saveStake = (value: string, mode: KeyboardInputMode) => {
     const n = Number(value.replaceAll(',', ''))
@@ -205,23 +211,34 @@ export default function Predict() {
                   </p>
                   <p className='predict-countdown'>
                     <span data-testid='predict-countdown'>
-                      {selectedExpiry ? formatCountdown(secondsToClose) : '–:––'}
+                      {selectedExpiry
+                        ? formatCountdown(windowState === 'upcoming' ? opensAt - nowSec : enterBy - nowSec)
+                        : '–:––'}
                     </span>
-                    <span className='predict-countdown__label'>{t('predict.toClose')}</span>
+                    <span className='predict-countdown__label'>
+                      {windowState === 'upcoming' ? t('predict.untilOpen') : t('predict.leftToEnter')}
+                    </span>
                   </p>
                 </div>
                 <p className='predict-status' aria-live='polite'>
-                  {gapCents != null && gapCents !== 0 && lineOfficial ? (
+                  <span
+                    className={windowState === 'open' ? 'predict-tag predict-tag--won' : 'predict-tag'}
+                    data-testid='predict-window-state'
+                  >
+                    {windowState === 'open' ? t('predict.windowOpen') : t('predict.windowUpcoming')}
+                  </span>
+                  {gapCents != null && gapCents !== 0 ? (
                     <Glyph name={gapCents > 0 ? 'arrowUp' : 'arrowDown'} size={14} strokeWidth={2.25} />
                   ) : null}
                   {status}
                 </p>
                 <PredictChart
                   samples={market?.samples ?? []}
-                  lineCents={lineCents}
+                  lineCents={lineOfficial ? lineCents : null}
                   expiry={selectedExpiry}
                   kind={kind}
                   nowSec={nowSec}
+                  showOpen
                 />
               </section>
 
@@ -308,6 +325,8 @@ export default function Predict() {
           <p className='predict-estimate predict-estimate--error' role='alert'>
             {stakeError}
           </p>
+        ) : !takesEntries ? (
+          <p className='predict-estimate'>{t('predict.entriesOpenAt', { time: formatClockTime(opensAt) })}</p>
         ) : estimate != null ? (
           <p className='predict-estimate' data-testid='predict-est-payout'>
             {t('predict.estimate', { amount: formatSats(estimate), multiplier: formatMultiplier(multiplier) })}
@@ -344,7 +363,11 @@ export default function Predict() {
             >
               <span className='predict-field__value'>{formatClockTime(expiry)}</span>
               <span className='predict-field__label'>
-                {t('predict.closesInShort', { time: formatCountdown(expiry - nowSec) })}
+                {nowSec >= windowOpen(expiry)
+                  ? t('predict.openNow', {
+                      time: formatCountdown(expiry - PREDICT_LOCK_S - PREDICT_MIN_LEFT_S - nowSec),
+                    })
+                  : t('predict.opensAtRow', { time: formatClockTime(windowOpen(expiry)) })}
                 {expiry === selectedExpiry ? <Glyph name='check' size={18} strokeWidth={2.25} /> : null}
               </span>
             </button>

@@ -76,11 +76,19 @@ function renderPredict(balance = 500_000) {
 }
 
 describe('Predict screen & desktop navigation', () => {
+  // Thirty seconds after a window opens, so it is open and its price to beat is set.
+  const openWindow = Math.ceil(Date.now() / 1000 / 300) * 300 + 30
+
   beforeEach(() => {
     localStorage.clear()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(openWindow * 1000)
   })
 
-  afterEach(cleanup)
+  afterEach(() => {
+    vi.useRealTimers()
+    cleanup()
+  })
 
   it('shows Predict in DesktopWalletShell on bitcoin mainnet and navigates to Pages.Predict', () => {
     const navigate = vi.fn()
@@ -112,6 +120,7 @@ describe('Predict screen & desktop navigation', () => {
 
     await waitFor(() => expect(screen.getByTestId('predict-spot-price')).toHaveTextContent('$65,000.00'))
     expect(screen.getByText('Make a prediction')).toBeInTheDocument()
+    expect(screen.getByTestId('predict-window-state')).toHaveTextContent('Open')
     expect(screen.getByTestId('predict-call-higher')).toHaveAttribute('aria-checked', 'true')
 
     fireEvent.click(screen.getByTestId('predict-call-lower'))
@@ -133,6 +142,18 @@ describe('Predict screen & desktop navigation', () => {
     fireEvent.click(confirmBtn)
 
     await waitFor(() => expect(screen.getByTestId('predict-detail-hero')).toBeInTheDocument())
+  })
+
+  it('says when a window is not open yet and holds the review until it is', async () => {
+    // 100 seconds before a close: too late for this window, so the next one is picked and has not opened.
+    vi.setSystemTime((openWindow - 30 + 200) * 1000)
+    localStorage.setItem('arkade-predict-intro-v1', '1')
+    renderPredict()
+    await waitFor(() => expect(screen.getByTestId('predict-spot-price')).toHaveTextContent('$65,000.00'))
+
+    expect(screen.getByTestId('predict-window-state')).toHaveTextContent('Not open yet')
+    expect(screen.getByText(/You can enter once it opens at/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Review prediction' })).toBeDisabled()
   })
 
   it('refuses a stake below the minimum', async () => {

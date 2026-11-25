@@ -4962,6 +4962,10 @@ html.palette-dark .onboard__choice-well {
   font-variant-numeric: tabular-nums;
 }
 
+.predict-status .predict-tag {
+  margin-right: 0.25rem;
+}
+
 .predict-status svg {
   color: var(--brand-text);
 }
@@ -4992,6 +4996,11 @@ html.palette-dark .onboard__choice-well {
   stroke: var(--brand-text);
   stroke-width: 1.25;
   stroke-dasharray: 3 4;
+}
+
+.predict-chart__open {
+  stroke: var(--ink-4);
+  stroke-width: 1;
 }
 
 .predict-chart__price {
