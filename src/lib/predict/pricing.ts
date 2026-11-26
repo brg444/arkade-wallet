@@ -1,5 +1,4 @@
 import {
-  BEACON_READ_FEE,
   DUST_SATS,
   MULTIPLIER_MAX,
   MULTIPLIER_MIN,
@@ -8,6 +7,7 @@ import {
   PREDICT_LOCK_S,
   PREDICT_MAX_AHEAD_S,
   PREDICT_MIN_LEFT_S,
+  PREDICT_READ_FEE,
   type PredictKind,
 } from './constants'
 
@@ -105,7 +105,7 @@ export function holderPayoff(kind: PredictKind, priceCents: bigint, strikeCents:
 export function settlementOutputs(
   holderGross: bigint,
   locked: bigint,
-  readFee: bigint = BEACON_READ_FEE,
+  readFee: bigint = PREDICT_READ_FEE,
 ):
   | { mode: 'holder'; holder: bigint }
   | { mode: 'writer'; writer: bigint }

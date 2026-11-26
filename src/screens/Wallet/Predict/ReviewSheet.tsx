@@ -5,7 +5,7 @@ import SheetModal from '../../../components/SheetModal'
 import Glyph from '../../../icons/Glyph'
 import { prettyFiatAmount, prettyNumber } from '../../../lib/format'
 import { hapticLight, hapticSuccess } from '../../../lib/haptics'
-import { BEACON_READ_FEE, type PredictKind } from '../../../lib/predict/constants'
+import { type PredictKind } from '../../../lib/predict/constants'
 import type { PredictQuote } from '../../../lib/predict/engine'
 import { formatCountdown, usdFromCents } from '../../../lib/predict/pricing'
 import type { PredictPosition } from '../../../lib/predict/storage'
@@ -146,10 +146,6 @@ export default function ReviewSheet({
             <div className='predict-field'>
               <span className='predict-field__label'>{t('predict.pays')}</span>
               <span className='predict-field__value'>{formatMultiplier(quote.multiplier)}</span>
-            </div>
-            <div className='predict-field'>
-              <span className='predict-field__label'>{t('predict.fee')}</span>
-              <span className='predict-field__value'>{formatSats(BEACON_READ_FEE)}</span>
             </div>
             <div className='predict-field'>
               <span className='predict-field__label'>{t('predict.quoteHolds')}</span>

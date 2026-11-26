@@ -1,25 +1,28 @@
-import { asset, networks } from '@arkade-os/sdk'
-import { secp256k1 } from '@noble/curves/secp256k1.js'
+import { arkade, CSVMultisigTapscript, networks, Transaction } from '@arkade-os/sdk'
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js'
 import { describe, expect, it } from 'vitest'
 import {
-  BEACON_READ_FEE,
   MAINNET_BACKUP_PUBKEY,
-  MAINNET_BEACON_STATUS,
   MAINNET_DESK,
   MAINNET_EXIT,
   MAINNET_FALLBACK_DELAY,
   MAINNET_FINAL_EXIT_DELAY,
-  MUTINYNET_BEACON_STATUS,
-  MUTINYNET_EXIT,
+  MAINNET_ORACLE_PUBKEY,
+  MUTINYNET_ORACLE_PUBKEY,
+  PREDICT_READ_FEE,
   PREDICT_VOID_AFTER,
 } from '../../../lib/predict/constants'
 import {
   backupKeyMatches,
-  beaconIdOf,
   bindPredictContracts,
+  buildPredictSettleTx,
   decodeState,
+  DIA_SCALE,
   exitSequence,
-  parseOracleBeacon,
+  oracleKeyMatches,
+  predictFixDigest,
+  predictSettlePriceCents,
+  predictVaultProgram,
   slotFixing,
   STATE_SIZE,
 } from '../../../lib/predict/contracts'
@@ -28,10 +31,10 @@ import { bytesToHex, hexToBytes } from '../../../lib/predict/hex'
 const SERVER_KEY = secp256k1.getPublicKey(hexToBytes('11'.repeat(32)), true).subarray(1)
 const EMULATOR_KEY = secp256k1.getPublicKey(hexToBytes('22'.repeat(32)), true)
 const HOLDER_KEY = secp256k1.getPublicKey(hexToBytes('33'.repeat(32)), true).subarray(1)
+const CHECKPOINT_HEX = '03080040b27520dfcaec558c7e78cf3e38b898ba8a43cfb5727266bae32c5c5b3aeb32c558aa0bac'
 
-describe('predict PredictVaultV2 contracts & beacon parsing', () => {
-  it('derives deterministic mainnet ark1 OptionIntent and PredictVaultV2 addresses', () => {
-    const beacon = beaconIdOf(asset.AssetId.create(MAINNET_BEACON_STATUS.issueTxid, 0))
+describe('predict PredictVaultV3 contracts & standalone settlement', () => {
+  it('derives deterministic mainnet ark1 OptionIntent and PredictVaultV3 addresses', () => {
     const bound = bindPredictContracts({
       kind: 2,
       strike: 6_500_000n,
@@ -42,12 +45,12 @@ describe('predict PredictVaultV2 contracts & beacon parsing', () => {
       exit: MAINNET_EXIT,
       writerPk: hexToBytes(MAINNET_DESK.pubkey),
       holderPk: HOLDER_KEY,
+      oraclePk: hexToBytes(MAINNET_ORACLE_PUBKEY),
       backupPk: hexToBytes(MAINNET_BACKUP_PUBKEY),
       voidAfter: PREDICT_VOID_AFTER,
       fallbackDelay: MAINNET_FALLBACK_DELAY,
       finalExitDelay: MAINNET_FINAL_EXIT_DELAY,
-      beacon,
-      readFee: BEACON_READ_FEE,
+      readFee: PREDICT_READ_FEE,
       serverKey: SERVER_KEY,
       emulatorKey: EMULATOR_KEY,
       hrp: networks.bitcoin.hrp,
@@ -58,6 +61,70 @@ describe('predict PredictVaultV2 contracts & beacon parsing', () => {
     expect(bound.intentAddress).not.toBe(bound.vaultAddress)
     expect(bound.intentPkScript).toHaveLength(34)
     expect(bound.vaultPkScript).toHaveLength(34)
+  })
+
+  it('builds a 1-input standalone settle tx and decodes the settlement price from its witness', () => {
+    const oracleSecret = hexToBytes('44'.repeat(32))
+    const oraclePk = schnorr.getPublicKey(oracleSecret)
+    const expiry = 1_800_000_000n
+    const bound = bindPredictContracts({
+      kind: 2,
+      strike: 6_500_000n,
+      collateral: 19_000n,
+      stake: 10_000n,
+      expiry,
+      deadline: expiry - 300n,
+      exit: MAINNET_EXIT,
+      writerPk: hexToBytes(MAINNET_DESK.pubkey),
+      holderPk: HOLDER_KEY,
+      oraclePk,
+      backupPk: hexToBytes(MAINNET_BACKUP_PUBKEY),
+      voidAfter: PREDICT_VOID_AFTER,
+      fallbackDelay: MAINNET_FALLBACK_DELAY,
+      finalExitDelay: MAINNET_FINAL_EXIT_DELAY,
+      serverKey: SERVER_KEY,
+      emulatorKey: EMULATOR_KEY,
+      hrp: networks.bitcoin.hrp,
+    })
+
+    const prev = new Transaction({ version: 3, allowUnknownOutputs: true })
+    prev.addInput({ txid: new Uint8Array(32).fill(7), index: 0 })
+    prev.addOutput({ script: bound.vaultPkScript, amount: 19_000n })
+
+    const cents = 6_543_210n
+    const time = Number(expiry + 12n)
+    const oracleSig = schnorr.sign(predictFixDigest({ expiry, cents, time: BigInt(time) }), oracleSecret)
+    const vaultScript = new arkade.ArkadeProgramScript(predictVaultProgram(), bound.vault, {
+      serverKey: SERVER_KEY,
+      emulatorKey: EMULATOR_KEY,
+    })
+    const built = buildPredictSettleTx({
+      vault: {
+        script: vaultScript,
+        coin: { txid: prev.id, vout: 0, value: 19_000, prevTx: prev.toBytes(true, true) },
+      },
+      fixing: {
+        price: cents * DIA_SCALE,
+        time,
+        nonce: 1n,
+        intentExpiry: time + 3600,
+        sig: new Uint8Array(64).fill(9),
+        oracleSig,
+      },
+      payouts: [{ script: bound.holderPkScript, amount: 19_000n }],
+      checkpoint: CSVMultisigTapscript.decode(hexToBytes(CHECKPOINT_HEX)),
+    })
+
+    expect(built.arkTx.inputsLength).toBe(1)
+    expect(built.checkpoints).toHaveLength(1)
+    expect(predictSettlePriceCents(built.arkTx)).toBe(cents)
+  })
+
+  it('matches only the pinned oracle x-only pubkey', () => {
+    expect(oracleKeyMatches(MAINNET_ORACLE_PUBKEY, MAINNET_ORACLE_PUBKEY)).toBe(true)
+    expect(oracleKeyMatches(MAINNET_ORACLE_PUBKEY.toUpperCase(), MAINNET_ORACLE_PUBKEY)).toBe(true)
+    expect(oracleKeyMatches(MUTINYNET_ORACLE_PUBKEY, MAINNET_ORACLE_PUBKEY)).toBe(false)
+    expect(oracleKeyMatches('not-hex', MAINNET_ORACLE_PUBKEY)).toBe(false)
   })
 
   it('enforces fail-closed backup key matching on mainnet', () => {
@@ -76,22 +143,7 @@ describe('predict PredictVaultV2 contracts & beacon parsing', () => {
     ).toBe(true)
   })
 
-  it('validates pinned mainnet and mutinynet oracle beacon specs', () => {
-    const main = parseOracleBeacon(MAINNET_BEACON_STATUS, MAINNET_BEACON_STATUS.issueTxid, 0, 'ark')
-    expect(main.ok).toBe(true)
-    if (main.ok) {
-      expect(main.beacon.exit).toBe(MAINNET_EXIT)
-      expect(main.beacon.readFee).toBe(1000n)
-    }
-
-    const mut = parseOracleBeacon(MUTINYNET_BEACON_STATUS, MUTINYNET_BEACON_STATUS.issueTxid, 0, 'tark')
-    expect(mut.ok).toBe(true)
-    if (mut.ok) {
-      expect(mut.beacon.exit).toBe(MUTINYNET_EXIT)
-    }
-  })
-
-  it('decodes 329-byte beacon state packet and extracts valid slot fixing', () => {
+  it('decodes legacy 329-byte beacon state packet and extracts valid slot fixing', () => {
     const bytes = new Uint8Array(STATE_SIZE)
     bytes[0] = 1 // version
     bytes[1] = 3 // round = 3

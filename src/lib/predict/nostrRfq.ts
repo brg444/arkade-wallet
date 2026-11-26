@@ -42,8 +42,7 @@ export interface PredictRfqQuote {
     void_after: number
     fallback_delay: number
     final_exit_delay: number
-    beacon_txid: string
-    beacon_gidx: number
+    oracle_pubkey: string
     intent_address: string
     vault_address: string
   }
@@ -76,8 +75,7 @@ export interface NostrPredictPosition {
   void_after: number
   fallback_delay: number
   final_exit_delay: number
-  beacon_txid: string
-  beacon_gidx: number
+  oracle_pubkey: string
   vault_address: string
   fill_txid: string
 }
@@ -145,8 +143,7 @@ export function parseRfqReply(raw: unknown): WireReply | null {
     !isSafeInt(p.exit) ||
     !isSafeInt(p.void_after) ||
     !isSafeInt(p.fallback_delay) ||
-    !isSafeInt(p.final_exit_delay) ||
-    !isSafeInt(p.beacon_gidx)
+    !isSafeInt(p.final_exit_delay)
   ) {
     return null
   }
@@ -154,7 +151,7 @@ export function parseRfqReply(raw: unknown): WireReply | null {
     !isHex64(p.writer_pubkey) ||
     !isScript(p.writer_pk_script) ||
     !isHex64(p.backup_pubkey) ||
-    !isHex64(p.beacon_txid)
+    !isHex64(p.oracle_pubkey)
   ) {
     return null
   }
@@ -178,8 +175,7 @@ export function parseRfqReply(raw: unknown): WireReply | null {
       void_after: p.void_after,
       fallback_delay: p.fallback_delay,
       final_exit_delay: p.final_exit_delay,
-      beacon_txid: p.beacon_txid.toLowerCase(),
-      beacon_gidx: p.beacon_gidx,
+      oracle_pubkey: p.oracle_pubkey.toLowerCase(),
       intent_address: p.intent_address,
       vault_address: p.vault_address,
     },
@@ -192,6 +188,7 @@ export function parseNostrPredictPosition(raw: unknown): NostrPredictPosition | 
   if (b.v !== 1 || b.type !== 'option_position' || b.pair !== PAIR) return null
   if (b.kind !== 2 && b.kind !== 3) return null
   const programId = typeof b.program_id === 'string' ? b.program_id : PREDICT_VAULT_PROGRAM_ID
+  if (programId !== PREDICT_VAULT_PROGRAM_ID) return null
   if (!isHex64(b.rfq_id) || !isAmount(b.collateral) || !isAmount(b.stake)) return null
   const strike = isSafeInt(b.strike) ? b.strike : isAmount(b.strike) ? Number(b.strike) : null
   if (
@@ -201,8 +198,7 @@ export function parseNostrPredictPosition(raw: unknown): NostrPredictPosition | 
     !isSafeInt(b.exit) ||
     !isSafeInt(b.void_after) ||
     !isSafeInt(b.fallback_delay) ||
-    !isSafeInt(b.final_exit_delay) ||
-    !isSafeInt(b.beacon_gidx)
+    !isSafeInt(b.final_exit_delay)
   ) {
     return null
   }
@@ -212,7 +208,7 @@ export function parseNostrPredictPosition(raw: unknown): NostrPredictPosition | 
     !isHex64(b.holder_pubkey) ||
     !isScript(b.holder_pk_script) ||
     !isHex64(b.backup_pubkey) ||
-    !isHex64(b.beacon_txid) ||
+    !isHex64(b.oracle_pubkey) ||
     !isHex64(b.fill_txid)
   ) {
     return null
@@ -238,8 +234,7 @@ export function parseNostrPredictPosition(raw: unknown): NostrPredictPosition | 
     void_after: b.void_after,
     fallback_delay: b.fallback_delay,
     final_exit_delay: b.final_exit_delay,
-    beacon_txid: b.beacon_txid.toLowerCase(),
-    beacon_gidx: b.beacon_gidx,
+    oracle_pubkey: b.oracle_pubkey.toLowerCase(),
     vault_address: b.vault_address,
     fill_txid: b.fill_txid.toLowerCase(),
   }

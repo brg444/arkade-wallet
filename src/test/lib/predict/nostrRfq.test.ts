@@ -1,23 +1,23 @@
-import { asset, networks } from '@arkade-os/sdk'
+import { networks } from '@arkade-os/sdk'
 import { describe, expect, it } from 'vitest'
 import {
-  BEACON_READ_FEE,
   MAINNET_BACKUP_PUBKEY,
-  MAINNET_BEACON_STATUS,
   MAINNET_DESK,
   MAINNET_EXIT,
   MAINNET_FALLBACK_DELAY,
   MAINNET_FINAL_EXIT_DELAY,
+  MAINNET_ORACLE_PUBKEY,
   PAIR,
+  PREDICT_READ_FEE,
   PREDICT_VAULT_PROGRAM_ID,
   PREDICT_VOID_AFTER,
 } from '../../../lib/predict/constants'
-import { beaconIdOf, bindPredictContracts } from '../../../lib/predict/contracts'
+import { bindPredictContracts } from '../../../lib/predict/contracts'
 import { bytesToHex, hexToBytes } from '../../../lib/predict/hex'
 import { parseNostrPredictPosition, parseRfqReply } from '../../../lib/predict/nostrRfq'
 
 describe('predict Nostr RFQ wire compatibility', () => {
-  it('parses a real COINFLIP desk rfq_quote payload without kind/strike/expiry in profile', () => {
+  it('parses a COINFLIP desk PredictVaultV3 rfq_quote payload and proves exact address parity', () => {
     const raw = {
       v: 1,
       type: 'rfq_quote',
@@ -34,14 +34,13 @@ describe('predict Nostr RFQ wire compatibility', () => {
         void_after: Number(PREDICT_VOID_AFTER),
         fallback_delay: Number(MAINNET_FALLBACK_DELAY),
         final_exit_delay: Number(MAINNET_FINAL_EXIT_DELAY),
-        beacon_txid: MAINNET_BEACON_STATUS.issueTxid,
-        beacon_gidx: 0,
+        oracle_pubkey: MAINNET_ORACLE_PUBKEY,
         deadline: 1795616832,
         exit: Number(MAINNET_EXIT),
         intent_address:
-          'ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamececp98hy9fmarg039rjm69hvwxa5z05wz56rtzsyw2scv58aaa07hjesxq',
+          'ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamec6m6nq4tlspre6p4q077r02aga40v73vwndyuwa6gmtw3v2qt88dn5afpg',
         vault_address:
-          'ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamechu55pqk5tyj2len6cl30x2sx936g55u04qkvjgdl4umeqjx7pcu3v7xdh',
+          'ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamecdfaav6d8xwzem5z7392s7vg9drf37ak6u7u7tuet6gyqsy4aasngwjts8',
       },
     }
 
@@ -50,10 +49,11 @@ describe('predict Nostr RFQ wire compatibility', () => {
     expect(parsed?.type).toBe('rfq_quote')
     if (parsed?.type === 'rfq_quote') {
       expect(parsed.to_amount).toBe('31600')
+      expect(parsed.profile.oracle_pubkey).toBe(MAINNET_ORACLE_PUBKEY)
       expect(parsed.profile.intent_address).toBe(raw.profile.intent_address)
       expect(parsed.profile.vault_address).toBe(raw.profile.vault_address)
 
-      // Prove exact address & script parity with the live coinflip-mainnet desk.
+      // Prove exact address & script parity with arkade-options PredictVaultV3.
       const bound = bindPredictContracts({
         kind: 2,
         strike: 5_834_115n,
@@ -64,12 +64,12 @@ describe('predict Nostr RFQ wire compatibility', () => {
         exit: MAINNET_EXIT,
         writerPk: hexToBytes(parsed.profile.writer_pubkey),
         holderPk: hexToBytes('1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f'),
+        oraclePk: hexToBytes(parsed.profile.oracle_pubkey),
         backupPk: hexToBytes(parsed.profile.backup_pubkey),
         voidAfter: BigInt(parsed.profile.void_after),
         fallbackDelay: BigInt(parsed.profile.fallback_delay),
         finalExitDelay: BigInt(parsed.profile.final_exit_delay),
-        beacon: beaconIdOf(asset.AssetId.create(parsed.profile.beacon_txid, parsed.profile.beacon_gidx)),
-        readFee: BEACON_READ_FEE,
+        readFee: PREDICT_READ_FEE,
         serverKey: hexToBytes('038202bebddeb1f7442803897a85eaf3ce9254d07df0172fc3725ab5f0d097779c'),
         emulatorKey: hexToBytes('0239c196415da47b26456a101daaa12ba9e445bfe153197f1e2b750bf40e52092e'),
         hrp: networks.bitcoin.hrp,
@@ -95,7 +95,7 @@ describe('predict Nostr RFQ wire compatibility', () => {
     })
   })
 
-  it('parses a COINFLIP option_position event with string strike', () => {
+  it('parses a COINFLIP PredictVaultV3 option_position event and ignores legacy PredictVaultV2 events', () => {
     const raw = {
       v: 1,
       type: 'option_position',
@@ -116,16 +116,18 @@ describe('predict Nostr RFQ wire compatibility', () => {
       void_after: Number(PREDICT_VOID_AFTER),
       fallback_delay: Number(MAINNET_FALLBACK_DELAY),
       final_exit_delay: Number(MAINNET_FINAL_EXIT_DELAY),
-      beacon_txid: MAINNET_BEACON_STATUS.issueTxid,
-      beacon_gidx: 0,
+      oracle_pubkey: MAINNET_ORACLE_PUBKEY,
       vault_address:
-        'ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamechu55pqk5tyj2len6cl30x2sx936g55u04qkvjgdl4umeqjx7pcu3v7xdh',
+        'ark1qzpq904am6clw3pgqwyh4p02708fy4xs0hcpwt7rwfdttuxsjamecdfaav6d8xwzem5z7392s7vg9drf37ak6u7u7tuet6gyqsy4aasngwjts8',
       fill_txid: 'dd'.repeat(32),
     }
 
     const parsed = parseNostrPredictPosition(raw)
     expect(parsed).not.toBeNull()
     expect(parsed?.strike).toBe(5834115)
+    expect(parsed?.oracle_pubkey).toBe(MAINNET_ORACLE_PUBKEY)
     expect(parsed?.fill_txid).toBe('dd'.repeat(32))
+
+    expect(parseNostrPredictPosition({ ...raw, program_id: 'PredictVaultV2' })).toBeNull()
   })
 })

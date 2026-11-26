@@ -75,7 +75,33 @@ describe('predict intent lifecycle classification', () => {
     expect(refunded.refundable).toBe(false)
   })
 
-  it('splits settlement payouts skipping beacon continuation at output 0', () => {
+  it('splits settlement payouts for standalone PredictVaultV3 and legacy beacon transactions', () => {
+    const ext = '6a0441524b01'
+    const anchor = '51024e73'
+    expect(
+      splitPayouts(
+        [
+          { amount: 19_000n, script: HOLDER },
+          { amount: 0n, script: ext },
+          { amount: 0n, script: anchor },
+        ],
+        HOLDER,
+        DESK,
+      ),
+    ).toEqual({ user: 19_000n, desk: 0n })
+
+    expect(
+      splitPayouts(
+        [
+          { amount: 19_000n, script: DESK },
+          { amount: 0n, script: ext },
+          { amount: 0n, script: anchor },
+        ],
+        HOLDER,
+        DESK,
+      ),
+    ).toEqual({ user: 0n, desk: 19_000n })
+
     const beacon = `5120${'dd'.repeat(32)}`
     const win = splitPayouts(
       [

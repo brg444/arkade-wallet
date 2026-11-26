@@ -1,7 +1,6 @@
 import {
   arkade,
   ArkAddress,
-  asset,
   InMemoryContractRepository,
   InMemoryWalletRepository,
   RestArkProvider,
@@ -13,25 +12,24 @@ import {
 } from '@arkade-os/sdk'
 import { base64 } from '@scure/base'
 import {
-  BEACON_READ_FEE,
   DUST_SATS,
+  PREDICT_READ_FEE,
   PREDICT_VOID_AFTER,
-  type PredictBeaconStatus,
+  VAULT_EXPIRY_LAG,
   type PredictNetworkProfile,
 } from './constants'
 import {
-  beaconIdOf,
-  bindBeacon,
   bindPredictContracts,
+  buildPredictSettleTx,
   buildRefundTx,
-  buildSettleTx,
-  decodeState,
+  fetchOracleFixing,
   intentProgram,
-  parseOracleBeacon,
+  oracleKeyMatches,
+  payoutVtxo,
+  predictSettlePriceCents,
   predictVaultProgram,
   refundOutputs,
   settlePayouts,
-  slotFixing,
   slotPrice,
   statePacketOf,
   submitCospend,
@@ -296,6 +294,7 @@ function termsFromPosition(
   const exit = BigInt(pos.exit || Number(profile.exit))
   const signerKey = verifiedSignerKey(pos.holderAddress, pos.holderPubkey, serverKey, exit)
   const payoutKey = xOnly(decoded.vtxoTaprootKey)
+  if (!pos.oraclePkHex) throw new Error('Prediction is missing oracle signing key')
   return {
     kind: pos.kind,
     strike: BigInt(pos.strikeCents),
@@ -307,12 +306,12 @@ function termsFromPosition(
     writerPk: hexToBytes(pos.deskPkHex),
     holderPk: signerKey ?? payoutKey,
     holderPayoutKey: signerKey ? undefined : payoutKey,
+    oraclePk: hexToBytes(pos.oraclePkHex),
     backupPk: pos.backupPkHex ? hexToBytes(pos.backupPkHex) : undefined,
     voidAfter: BigInt(pos.voidAfter || Number(profile.voidAfter)),
     fallbackDelay: BigInt(pos.fallbackDelay || Number(profile.fallbackDelay)),
     finalExitDelay: BigInt(pos.finalExitDelay || Number(profile.finalExitDelay)),
-    beacon: beaconIdOf(asset.AssetId.create(pos.beaconTxid, pos.beaconGidx)),
-    readFee: BEACON_READ_FEE,
+    readFee: PREDICT_READ_FEE,
     serverKey,
     emulatorKey,
     hrp: profile.hrp,
@@ -387,16 +386,27 @@ export async function refreshLivePosition(
           const txPage = await indexer.getVirtualTxs([txid])
           const raw = virtualTxsById(txPage.txs ?? []).get(txid)
           if (raw) {
-            const split = splitPayouts(psbtOutputs(raw), holderScript)
+            let deskScript: string | undefined
+            try {
+              if (pos.deskPkHex) {
+                const serverKey = ArkAddress.decode(pos.holderAddress).serverPubKey
+                const exit = BigInt(pos.exit || Number(profile.exit))
+                deskScript = bytesToHex(payoutVtxo(hexToBytes(pos.deskPkHex), serverKey, exit).pkScript)
+              }
+            } catch {
+              deskScript = undefined
+            }
+            const split = splitPayouts(psbtOutputs(raw), holderScript, deskScript)
             if (split) {
               userPayoutSats = split.user.toString()
               deskPayoutSats = split.desk.toString()
             }
             try {
-              const cents = slotPrice(statePacketOf(Transaction.fromPSBT(base64.decode(raw))), BigInt(pos.expiry))
+              const tx = Transaction.fromPSBT(base64.decode(raw))
+              const cents = predictSettlePriceCents(tx) ?? slotPrice(statePacketOf(tx), BigInt(pos.expiry))
               if (cents != null) settleCents = cents.toString()
             } catch {
-              // refund tx has no beacon state packet
+              // refund tx has no settlement witness or state packet
             }
           }
         } catch {
@@ -449,17 +459,19 @@ export async function cancelLivePredictIntent(
 export async function settleLivePredictVault(
   pos: PredictPosition,
   profile: PredictNetworkProfile,
-  beaconStatus: PredictBeaconStatus,
+  oracleFixingUrl: string,
+  pinnedOraclePkHex: string,
 ): Promise<{ result: string; txid?: string; payoutSats?: bigint; settleCents?: bigint }> {
-  const parsed = parseOracleBeacon(beaconStatus, pos.beaconTxid, pos.beaconGidx, profile.hrp)
-  if (!parsed.ok) throw new Error(`Beacon mismatch: ${parsed.error}`)
+  if (!oracleKeyMatches(pos.oraclePkHex, pinnedOraclePkHex)) {
+    throw new Error('Oracle key mismatch')
+  }
+  const now = Math.floor(Date.now() / 1000)
+  if (now < pos.expiry + Number(VAULT_EXPIRY_LAG)) return { result: 'waiting' }
+
   const { client, indexer, emulator } = await connectPredictClient(profile)
   if (!client.emulatorKey) throw new Error('Emulator key unavailable')
   const terms = termsFromPosition(pos, profile, client.serverKey, client.emulatorKey)
   const bound = bindPredictContracts(terms)
-
-  const now = Math.floor(Date.now() / 1000)
-  if (now < pos.expiry) return { result: 'waiting' }
 
   const vaultScriptHex = bytesToHex(bound.vaultPkScript)
   const live = await indexer.getVtxos({ scripts: [vaultScriptHex], spendableOnly: true })
@@ -472,66 +484,25 @@ export async function settleLivePredictVault(
   }
   const vaultCoin = vaults.find((c) => c.txid === pos.fillTxid) ?? vaults[0]!
 
-  const beaconId = beaconIdOf(asset.AssetId.fromString(parsed.beacon.assetId))
-  const beaconBound = bindBeacon({
-    id: beaconId,
-    domain: parsed.beacon.domain,
-    expiryLag: parsed.beacon.expiryLag,
-    readFee: parsed.beacon.readFee,
-    adminPk: parsed.beacon.adminPk,
-    exit: parsed.beacon.exit,
-    hrp: profile.hrp,
-    serverKey: client.serverKey,
-    emulatorKey: client.emulatorKey,
-  })
-  if (beaconBound.address !== parsed.beacon.address) throw new Error('Beacon address derivation mismatch')
+  const fetched = await fetchOracleFixing(oracleFixingUrl, pos.expiry, pos.oraclePkHex)
+  if (!fetched.fixing) {
+    if (fetched.status === 400 || fetched.status === 404) return { result: 'unfixed' }
+    throw new Error(fetched.error ?? 'Failed to fetch oracle fixing')
+  }
+  const fixing = fetched.fixing
 
-  const foundBeacon = await indexer.getVtxos({ scripts: [bytesToHex(beaconBound.pkScript)], spendableOnly: true })
-  const holders = (foundBeacon.vtxos ?? []).filter(
-    (c) =>
-      !c.isSpent &&
-      !c.spentBy &&
-      (c.assets ?? []).some(
-        (a) => a.assetId.toLowerCase() === parsed.beacon.assetId.toLowerCase() && BigInt(a.amount) === 1n,
-      ),
-  )
-  if (!holders.length) return { result: 'waiting' }
-
-  const ids = [...new Set([vaultCoin.txid, ...holders.map((c) => c.txid)])]
-  const rawPage = await indexer.getVirtualTxs(ids)
-  const byId = virtualTxsById(rawPage.txs ?? [])
-
-  const vaultRaw = byId.get(vaultCoin.txid.toLowerCase())
+  const rawPage = await indexer.getVirtualTxs([vaultCoin.txid])
+  const vaultRaw = virtualTxsById(rawPage.txs ?? []).get(vaultCoin.txid.toLowerCase())
   if (!vaultRaw) return { result: 'waiting' }
   const vaultPrev = Transaction.fromPSBT(base64.decode(vaultRaw))
 
-  let bestBeacon: { coin: (typeof holders)[number]; prev: Transaction; state: Uint8Array; round: bigint } | null = null
-  for (const coin of holders) {
-    const raw = byId.get(coin.txid.toLowerCase())
-    if (!raw) continue
-    try {
-      const prev = Transaction.fromPSBT(base64.decode(raw))
-      const state = statePacketOf(prev)
-      const decoded = decodeState(state)
-      if (!bestBeacon || decoded.round > bestBeacon.round) {
-        bestBeacon = { coin, prev, state, round: decoded.round }
-      }
-    } catch {
-      continue
-    }
-  }
-  if (!bestBeacon) return { result: 'waiting' }
-
-  const fixing = slotFixing(bestBeacon.state, terms.expiry)
-  if (!fixing) return { result: 'unfixed' }
-
   const payout = settlePayouts({
     kind: terms.kind,
-    price: fixing.price,
+    price: fixing.cents,
     strike: terms.strike,
     collateral: terms.collateral,
     locked: BigInt(vaultCoin.value),
-    readFee: parsed.beacon.readFee,
+    readFee: PREDICT_READ_FEE,
     holderScript: bound.holderPkScript,
     writerScript: bound.writerPkScript,
   })
@@ -541,7 +512,7 @@ export async function settleLivePredictVault(
     serverKey: client.serverKey,
     emulatorKey: client.emulatorKey,
   })
-  const built = buildSettleTx({
+  const built = buildPredictSettleTx({
     vault: {
       script: vaultScript,
       coin: {
@@ -551,18 +522,7 @@ export async function settleLivePredictVault(
         prevTx: vaultPrev.toBytes(true, true),
       },
     },
-    beacon: {
-      script: beaconBound.script,
-      coin: {
-        txid: bestBeacon.coin.txid,
-        vout: bestBeacon.coin.vout,
-        value: bestBeacon.coin.value,
-        prevTx: bestBeacon.prev.toBytes(true, true),
-      },
-      state: bestBeacon.state,
-      id: asset.AssetId.fromString(parsed.beacon.assetId),
-    },
-    readFee: parsed.beacon.readFee,
+    fixing,
     payouts: payout.payouts,
     checkpoint: client.checkpoint,
   })
@@ -574,7 +534,7 @@ export async function settleLivePredictVault(
     result: 'settled',
     txid: submitted.txid,
     payoutSats: holderOut?.amount ?? 0n,
-    settleCents: fixing.price,
+    settleCents: fixing.cents,
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BEACON_READ_FEE, Q_MAX_MAINNET } from '../../../lib/predict/constants'
+import { PREDICT_READ_FEE, Q_MAX_MAINNET } from '../../../lib/predict/constants'
 import {
   formatCountdown,
   holderPayoff,
@@ -31,14 +31,14 @@ describe('predict pricing & window math', () => {
     expect(predictMultiplier({ kind: 2, spotCents: 10_000_000, lineCents: 6_500_000, years, vol: 0.55 })).toBeNull()
   })
 
-  it('computes payout and refuses payouts that do not beat stake after read fee', () => {
+  it('computes payout and refuses payouts that do not beat stake', () => {
     const stake = 10_000n
     const payout = predictPayout(stake, 1.9)
     expect(payout).toBe(19_000n)
     expect(payoutMultiplier(stake, payout)).toBe(1.9)
-    expect(payoutRefusal(payout, stake, BEACON_READ_FEE, Q_MAX_MAINNET)).toBe('')
-    expect(payoutRefusal(11_000n, 10_000n, BEACON_READ_FEE, Q_MAX_MAINNET)).toBe('payout')
-    expect(payoutRefusal(Q_MAX_MAINNET + 1n, 10_000n, BEACON_READ_FEE, Q_MAX_MAINNET)).toBe('payout')
+    expect(payoutRefusal(payout, stake, PREDICT_READ_FEE, Q_MAX_MAINNET)).toBe('')
+    expect(payoutRefusal(10_000n, 10_000n, PREDICT_READ_FEE, Q_MAX_MAINNET)).toBe('payout')
+    expect(payoutRefusal(Q_MAX_MAINNET + 1n, 10_000n, PREDICT_READ_FEE, Q_MAX_MAINNET)).toBe('payout')
   })
 
   it('resolves all-or-nothing holderPayoff with exact tie going to the desk', () => {
@@ -46,8 +46,8 @@ describe('predict pricing & window math', () => {
     expect(holderPayoff(2, 6_500_000n, 6_500_000n, 19_000n)).toBe(0n)
     expect(holderPayoff(3, 6_499_999n, 6_500_000n, 19_000n)).toBe(19_000n)
     expect(holderPayoff(3, 6_500_000n, 6_500_000n, 19_000n)).toBe(0n)
-    expect(settlementOutputs(19_000n, 19_000n, BEACON_READ_FEE)).toEqual({ mode: 'holder', holder: 18_000n })
-    expect(settlementOutputs(0n, 19_000n, BEACON_READ_FEE)).toEqual({ mode: 'writer', writer: 18_000n })
+    expect(settlementOutputs(19_000n, 19_000n, PREDICT_READ_FEE)).toEqual({ mode: 'holder', holder: 19_000n })
+    expect(settlementOutputs(0n, 19_000n, PREDICT_READ_FEE)).toEqual({ mode: 'writer', writer: 19_000n })
   })
 
   it('picks valid 5-minute grid windows and the earliest opening sample', () => {

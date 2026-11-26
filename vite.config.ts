@@ -34,6 +34,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/oracle/prices',
       },
+      '/predict-api/oracle/fixing': {
+        target: 'https://coinflip-mainnet-production.up.railway.app',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/predict-api/, ''),
+      },
     },
   },
   build: {

@@ -11,7 +11,7 @@ import Glyph from '../../../icons/Glyph'
 import { usePredict } from '../../../hooks/usePredict'
 import { prettyNumber, toSatoshis } from '../../../lib/format'
 import { hapticLight, hapticSubtle } from '../../../lib/haptics'
-import { BEACON_READ_FEE, PREDICT_LOCK_S, PREDICT_MIN_LEFT_S, type PredictKind } from '../../../lib/predict/constants'
+import { PREDICT_LOCK_S, PREDICT_MIN_LEFT_S, type PredictKind } from '../../../lib/predict/constants'
 import { formatCountdown, predictPayout, usdFromCents, windowOpen } from '../../../lib/predict/pricing'
 import { FiatContext } from '../../../providers/fiat'
 import { useTranslation } from '../../../providers/language'
@@ -83,7 +83,7 @@ export default function Predict() {
   const estimate = useMemo(() => {
     if (multiplier == null || stakeSats <= 0n) return null
     const gross = predictPayout(stakeSats, multiplier)
-    return gross - BEACON_READ_FEE > stakeSats ? gross - BEACON_READ_FEE : null
+    return gross > stakeSats ? gross : null
   }, [multiplier, stakeSats])
 
   // A window opens five minutes before its close and takes entries until two minutes before it.

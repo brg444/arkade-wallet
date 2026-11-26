@@ -1,7 +1,6 @@
 import {
   arkade,
   ArkAddress,
-  asset,
   buildOffchainTx,
   ConditionWitness,
   DefaultVtxo,
@@ -11,22 +10,22 @@ import {
   PrevArkTxField,
   setArkPsbtField,
   Transaction,
-  UnknownPacket,
   type ArkTxInput,
   type CSVMultisigTapscript,
   type EmulatorProvider,
   type ExtensionPacket,
 } from '@arkade-os/sdk'
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { keccak_256 } from '@noble/hashes/sha3.js'
 import { base64 } from '@scure/base'
-import beaconArtifact from './artifacts/attestation_beacon.artifact.json'
 import intentArtifact from './artifacts/option_intent.artifact.json'
 import predictArtifact from './artifacts/predict_vault.artifact.json'
 import {
-  BEACON_READ_FEE,
   DUST_SATS,
-  MUTINYNET_EXIT,
   MUTINYNET_FALLBACK_DELAY,
   MUTINYNET_FINAL_EXIT_DELAY,
+  PREDICT_READ_FEE,
   PREDICT_VOID_AFTER,
   PRICE_MAX,
   type PredictKind,
@@ -41,7 +40,16 @@ export const SLOT_SIZE = 40
 export const SLOTS_AT = 9
 const SLOT_OFFSETS = Array.from({ length: SLOT_COUNT }, (_, i) => SLOTS_AT + SLOT_SIZE * i)
 
-export type BeaconId = { txid: Uint8Array; gidx: bigint }
+export const DIA_SCALE = 10n ** 16n
+const DIA_HALF = DIA_SCALE / 2n
+/** `0x10 ||` compressed secp256k1 key of the pinned DIA Lasernet signer. */
+export const DIA_PUBKEY = hexToBytes('100211ee120bca9f272034d98b1b026bb4ab735ebeb5da8be6a69bf7ee0ea24cfd48')
+const DIA_DOMAIN = hexToBytes('f57d55f057fd4aba6b1a7f8bccb6a3e826cf71fd34971f22a39d7ffd6e620fb3')
+const DIA_TYPEHASH = hexToBytes('24e574fa7512cc24e9109b981256e33759d91bc2ee9b74a2bf633e013c0620b5')
+const DIA_INTENT_TYPE = hexToBytes('ef9b6324ed493183babb66ed98fcf36e9bcb0243ae4c5a29fcd99184b08f1899')
+const DIA_VERSION = hexToBytes('e6bbd6277e1bf288eed5e8d1780f9a50b239e86b153736bceebccf4ea79d90b3')
+const DIA_SYMBOL = hexToBytes('ee62665949c883f9e0f6f002eac32e00bd59dfe6c34e92a91c37d6a8322d6489')
+const DIA_SOURCE = hexToBytes('f5a695b63ab16fd8278cb1cf7d29f274a9574b64e0b894750e08c990fc8891bc')
 
 export interface BeaconSlot {
   expiry: bigint
@@ -54,14 +62,17 @@ export interface BeaconState {
   slots: BeaconSlot[]
 }
 
-export interface BeaconSpec {
-  assetId: string
-  address: string
-  domain: Uint8Array
-  expiryLag: bigint
-  readFee: bigint
-  adminPk: Uint8Array
-  exit: bigint
+export interface OracleFixing {
+  expiry: number
+  cents: bigint
+  price: bigint
+  time: number
+  nonce: bigint
+  intentExpiry: number
+  sig: Uint8Array
+  oracleSig: Uint8Array
+  oraclePk: Uint8Array
+  oraclePkHex: string
 }
 
 export interface PredictTerms {
@@ -75,11 +86,11 @@ export interface PredictTerms {
   writerPk: Uint8Array
   holderPk: Uint8Array
   holderPayoutKey?: Uint8Array
+  oraclePk: Uint8Array
   backupPk?: Uint8Array
   voidAfter?: bigint
   fallbackDelay?: bigint
   finalExitDelay?: bigint
-  beacon: BeaconId
   readFee?: bigint
   serverKey: Uint8Array
   emulatorKey: Uint8Array
@@ -108,20 +119,12 @@ export function exitSequence(seconds: bigint): bigint {
   return (1n << 22n) | units
 }
 
-export function beaconIdOf(id: asset.AssetId): BeaconId {
-  return { txid: Uint8Array.from(id.txid).reverse(), gidx: BigInt(id.groupIndex) }
-}
-
 export function predictVaultProgram() {
   return arkade.programFromArtifact(predictArtifact as unknown as arkade.ContractArtifact)
 }
 
 export function intentProgram() {
   return arkade.programFromArtifact(intentArtifact as unknown as arkade.ContractArtifact)
-}
-
-export function beaconProgram() {
-  return arkade.programFromArtifact(beaconArtifact as unknown as arkade.ContractArtifact)
 }
 
 export function payoutVtxo(pubKey: Uint8Array, serverKey: Uint8Array, exit: bigint) {
@@ -160,6 +163,12 @@ export function verifiedSignerKey(
     : undefined
 }
 
+export function oracleKeyMatches(quoteOraclePk: string, pinnedOraclePk: string): boolean {
+  const candidate = quoteOraclePk.trim().toLowerCase()
+  const expected = pinnedOraclePk.trim().toLowerCase()
+  return /^[0-9a-f]{64}$/.test(candidate) && /^[0-9a-f]{64}$/.test(expected) && candidate === expected
+}
+
 export function backupKeyMatches(
   quoteBackupPk: string,
   deskPk: string,
@@ -180,8 +189,8 @@ export function bindPredictContracts(terms: PredictTerms): BoundPredictContracts
   const serverKey = xOnly(terms.serverKey)
   const writerPk = xOnly(terms.writerPk)
   const holderPk = xOnly(terms.holderPk)
+  const oraclePk = xOnly(terms.oraclePk)
   if (terms.emulatorKey.length !== 33) throw new Error('emulatorKey must be 33 bytes')
-  if (terms.beacon.txid.length !== 32) throw new Error('beacon txid must be 32 bytes')
 
   const writer = payoutVtxo(writerPk, serverKey, terms.exit)
   const holder = terms.holderPayoutKey
@@ -207,9 +216,7 @@ export function bindPredictContracts(terms: PredictTerms): BoundPredictContracts
     collateral: terms.collateral,
     stake: terms.stake,
     expiry: terms.expiry,
-    beaconTxid: terms.beacon.txid,
-    beaconGidx: terms.beacon.gidx,
-    readFee: terms.readFee ?? BEACON_READ_FEE,
+    oraclePk,
     backupPk,
     voidAfter,
     fallbackDelay: exitSequence(fallbackDelay),
@@ -255,6 +262,170 @@ export function bin2num(bytes: Uint8Array): bigint {
   return bytes[bytes.length - 1]! & 0x80 ? -value : value
 }
 
+export function num2bin(value: bigint, size: number): Uint8Array {
+  if (value < 0n) throw new Error('num2bin: negative')
+  if (value >= 1n << BigInt(size * 8 - 1)) throw new Error(`num2bin: ${value} does not fit ${size} bytes`)
+  const out = new Uint8Array(size)
+  let rest = value
+  for (let i = 0; i < size; i++) {
+    out[i] = Number(rest & 0xffn)
+    rest >>= 8n
+  }
+  return out
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0))
+  let at = 0
+  for (const part of parts) {
+    out.set(part, at)
+    at += part.length
+  }
+  return out
+}
+
+function abiWord(value: bigint): Uint8Array {
+  if (value < 0n || value >= 1n << 255n) throw new Error('abi word')
+  const out = new Uint8Array(32)
+  let rest = value
+  for (let i = 31; i >= 0; i--) {
+    out[i] = Number(rest & 0xffn)
+    rest >>= 8n
+  }
+  return out
+}
+
+export function centsOf(price: bigint): bigint {
+  if (price <= 0n) throw new Error('nonpositive price')
+  const q = price / DIA_SCALE
+  const r = price % DIA_SCALE
+  const cents = r >= DIA_HALF ? q + 1n : q
+  if (cents <= 0n) throw new Error('price')
+  return cents
+}
+
+export function diaIntentDigest(intent: {
+  price: bigint
+  time: number
+  nonce: bigint
+  intentExpiry: number
+}): Uint8Array {
+  const body = concatBytes(
+    DIA_TYPEHASH,
+    DIA_INTENT_TYPE,
+    DIA_VERSION,
+    abiWord(1050n),
+    abiWord(intent.nonce),
+    abiWord(BigInt(intent.intentExpiry)),
+    DIA_SYMBOL,
+    abiWord(intent.price),
+    abiWord(BigInt(intent.time)),
+    DIA_SOURCE,
+  )
+  return keccak_256(concatBytes(Uint8Array.of(0x19, 0x01), DIA_DOMAIN, keccak_256(body)))
+}
+
+export function intentSigned(
+  intent: { price: bigint; time: number; nonce: bigint; intentExpiry: number; sig: Uint8Array },
+  oraclePk: Uint8Array = DIA_PUBKEY,
+): boolean {
+  if (intent.sig.length !== 64 || oraclePk.length !== 34 || oraclePk[0] !== 0x10) return false
+  try {
+    return (
+      secp256k1.verify(intent.sig, diaIntentDigest(intent), oraclePk.subarray(1), { prehash: false, lowS: false }) ===
+      true
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Digest signed by `oraclePk` for standalone `PredictVault.settle`:
+ * `sha256("BTCUSD-FIX" || "fix" || int2bytes(expiry, 8) || int2bytes(cents, 8) || int2bytes(time, 8))`.
+ */
+export function predictFixDigest(input: { expiry: bigint; cents: bigint; time: bigint }): Uint8Array {
+  const enc = new TextEncoder()
+  return sha256(
+    concatBytes(
+      enc.encode('BTCUSD-FIX'),
+      enc.encode('fix'),
+      num2bin(input.expiry, 8),
+      num2bin(input.cents, 8),
+      num2bin(input.time, 8),
+    ),
+  )
+}
+
+function parseWhole(value: unknown): bigint | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
+  if (typeof value === 'string' && /^[0-9]+$/.test(value)) return BigInt(value)
+  return null
+}
+
+function parseHexBytes(value: unknown, size: number): Uint8Array | null {
+  if (typeof value !== 'string' || value.length !== size * 2 || !/^[0-9a-fA-F]+$/.test(value)) return null
+  return hexToBytes(value)
+}
+
+/** Parse and cryptographically verify a signed fixing payload from `GET /api/fixing?expiry=...`. */
+export function parseOracleFixing(body: unknown, expectedOraclePkHex?: string): OracleFixing | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null
+  const root = body as Record<string, unknown>
+  const expiry =
+    typeof root.expiry === 'number' && Number.isSafeInteger(root.expiry) && root.expiry > 1800 ? root.expiry : null
+  const time = typeof root.time === 'number' && Number.isSafeInteger(root.time) && root.time > 0 ? root.time : null
+  const intentExpiry =
+    typeof root.intentExpiry === 'number' && Number.isSafeInteger(root.intentExpiry) ? root.intentExpiry : null
+  const price = parseWhole(root.raw)
+  const nonce = parseWhole(root.nonce)
+  const sig = parseHexBytes(root.sig, 64)
+  const oracleSig = parseHexBytes(root.oracleSig, 64)
+  const oraclePk = parseHexBytes(root.oraclePk, 32)
+  if (
+    expiry == null ||
+    time == null ||
+    intentExpiry == null ||
+    price == null ||
+    price <= 0n ||
+    nonce == null ||
+    !sig ||
+    !oracleSig ||
+    !oraclePk
+  ) {
+    return null
+  }
+  const oraclePkHex = bytesToHex(oraclePk)
+  if (expectedOraclePkHex && oraclePkHex !== expectedOraclePkHex.trim().toLowerCase()) return null
+  if (time < expiry || time > expiry + 60) return null
+  let cents: bigint
+  try {
+    cents = centsOf(price)
+  } catch {
+    return null
+  }
+  if (!intentSigned({ price, time, nonce, intentExpiry, sig })) return null
+  const digest = predictFixDigest({ expiry: BigInt(expiry), cents, time: BigInt(time) })
+  if (!schnorr.verify(oracleSig, digest, oraclePk)) return null
+  return { expiry, cents, price, time, nonce, intentExpiry, sig, oracleSig, oraclePk, oraclePkHex }
+}
+
+/** Fetch and verify the canonical signed fixing for `expiry`. */
+export async function fetchOracleFixing(
+  url: string,
+  expiry: number,
+  expectedOraclePkHex?: string,
+  signal?: AbortSignal,
+): Promise<{ status: number; fixing: OracleFixing | null; error?: string }> {
+  const endpoint = `${url}${url.includes('?') ? '&' : '?'}expiry=${expiry}`
+  const res = await fetch(endpoint, { signal, cache: 'no-store' })
+  const raw = (await res.json().catch(() => null)) as { error?: string } | null
+  if (!res.ok) return { status: res.status, fixing: null, error: raw?.error ?? `oracle fixing ${res.status}` }
+  const fixing = parseOracleFixing(raw, expectedOraclePkHex)
+  if (!fixing) return { status: 502, fixing: null, error: 'invalid fixing signature' }
+  return { status: 200, fixing }
+}
+
 export function decodeState(bytes: Uint8Array): BeaconState {
   if (bytes.length !== STATE_SIZE) throw new Error(`state is ${bytes.length} bytes, want ${STATE_SIZE}`)
   return {
@@ -293,105 +464,64 @@ export function slotPrice(state: Uint8Array, expiry: bigint): bigint | null {
   return slotFixing(state, expiry)?.price ?? null
 }
 
-export function parseOracleBeacon(
-  body: unknown,
-  beaconTxid?: string,
-  gidx = 0,
-  expectedHrp?: string,
-): { ok: true; beacon: BeaconSpec } | { ok: false; error: string } {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'oracle status' }
-  const root = body as Record<string, unknown>
-  const issue = typeof root.issueTxid === 'string' ? root.issueTxid.toLowerCase() : ''
-  if (!/^[0-9a-f]{64}$/.test(issue)) return { ok: false, error: 'oracle beacon' }
-  if (beaconTxid && issue !== beaconTxid.toLowerCase()) return { ok: false, error: 'oracle beacon' }
-  if (typeof root.assetId !== 'string') return { ok: false, error: 'oracle asset' }
-  let parsed: ReturnType<typeof asset.AssetId.fromString>
-  try {
-    parsed = asset.AssetId.fromString(root.assetId)
-  } catch {
-    return { ok: false, error: 'oracle asset' }
+function readCompactSize(bytes: Uint8Array, at: number): [number, number] | null {
+  if (at >= bytes.length) return null
+  const first = bytes[at]!
+  if (first < 0xfd) return [first, at + 1]
+  if (first === 0xfd) {
+    if (at + 3 > bytes.length) return null
+    return [bytes[at + 1]! | (bytes[at + 2]! << 8), at + 3]
   }
-  if (bytesToHex(parsed.txid) !== issue) return { ok: false, error: 'oracle asset' }
-  if (beaconTxid && Number(parsed.groupIndex) !== gidx) return { ok: false, error: 'oracle beacon' }
-  const addr = typeof root.address === 'string' ? root.address : ''
-  const validAddr = expectedHrp
-    ? addr.startsWith(`${expectedHrp}1`)
-    : addr.startsWith('ark1') || addr.startsWith('tark1')
-  if (!validAddr) return { ok: false, error: 'oracle address' }
-  const args = root.args as Record<string, unknown> | undefined
-  if (!args || typeof args !== 'object') return { ok: false, error: 'oracle args' }
-  const ctrl = typeof args.ctrlTxid === 'string' ? args.ctrlTxid.toLowerCase() : ''
-  if (ctrl !== bytesToHex(beaconIdOf(parsed).txid)) return { ok: false, error: 'ctrl txid' }
+  if (first === 0xfe) {
+    if (at + 5 > bytes.length) return null
+    const view = new DataView(bytes.buffer, bytes.byteOffset + at + 1, 4)
+    return [view.getUint32(0, true), at + 5]
+  }
+  return null
+}
 
-  const toBig = (val: unknown): bigint | null => {
-    if (typeof val === 'number' && Number.isSafeInteger(val) && val >= 0) return BigInt(val)
-    if (typeof val === 'string' && /^[0-9]+$/.test(val)) return BigInt(val)
+function decodeWitness(bytes: Uint8Array): Uint8Array[] | null {
+  const count = readCompactSize(bytes, 0)
+  if (!count) return null
+  const [n, start] = count
+  let at = start
+  const items: Uint8Array[] = []
+  for (let i = 0; i < n; i++) {
+    const len = readCompactSize(bytes, at)
+    if (!len) return null
+    const [size, dataAt] = len
+    if (dataAt + size > bytes.length) return null
+    items.push(bytes.subarray(dataAt, dataAt + size))
+    at = dataAt + size
+  }
+  return at === bytes.length ? items : null
+}
+
+/** Extract the rounded USD cents settlement price from a standalone `PredictVault.settle` transaction. */
+export function predictSettlePriceCents(tx: Transaction): bigint | null {
+  try {
+    const ext = Extension.fromTx(tx)
+    const emu = ext.getEmulatorPacket()
+    const entry = emu?.entries.find((item) => item.vin === 0)
+    if (!entry) return null
+    const stack = decodeWitness(entry.witness)
+    if (!stack || stack.length !== 6) return null
+    const rawPrice =
+      stack[0]!.length === 64 && stack[1]!.length === 64
+        ? stack[5]!
+        : stack[4]!.length === 64 && stack[5]!.length === 64
+          ? stack[0]!
+          : null
+    if (!rawPrice) return null
+    const price = bin2num(rawPrice)
+    const cents = centsOf(price)
+    return cents > 0n && cents <= PRICE_MAX ? cents : null
+  } catch {
     return null
   }
-  const expiryLag = toBig(args.expiryLag)
-  const readFee = toBig(args.readFee)
-  const exit = toBig(args.exit)
-  const domainHex = typeof args.domain === 'string' ? args.domain : ''
-  const adminPkHex = typeof args.adminPk === 'string' ? args.adminPk : ''
-  if (
-    expiryLag == null ||
-    readFee == null ||
-    exit == null ||
-    domainHex.length === 0 ||
-    domainHex.length % 2 !== 0 ||
-    !/^[0-9a-fA-F]+$/.test(domainHex) ||
-    !/^[0-9a-fA-F]{64}$/.test(adminPkHex)
-  ) {
-    return { ok: false, error: 'oracle args' }
-  }
-  return {
-    ok: true,
-    beacon: {
-      assetId: parsed.toString(),
-      address: addr,
-      domain: hexToBytes(domainHex),
-      expiryLag,
-      readFee,
-      adminPk: hexToBytes(adminPkHex),
-      exit,
-    },
-  }
 }
 
-export function bindBeacon(input: {
-  id: BeaconId
-  domain: Uint8Array
-  expiryLag: bigint
-  readFee: bigint
-  adminPk: Uint8Array
-  exit?: bigint
-  hrp: string
-  serverKey: Uint8Array
-  emulatorKey: Uint8Array
-}) {
-  const serverKey = xOnly(input.serverKey)
-  const args: Record<string, bigint | Uint8Array> = {
-    ctrlTxid: input.id.txid,
-    ctrlGidx: input.id.gidx,
-    domain: input.domain,
-    expiryLag: input.expiryLag,
-    readFee: input.readFee,
-    adminPk: xOnly(input.adminPk),
-    exit: exitSequence(input.exit ?? MUTINYNET_EXIT),
-    server: serverKey,
-  }
-  const script = new arkade.ArkadeProgramScript(beaconProgram(), args, {
-    serverKey,
-    emulatorKey: input.emulatorKey,
-  })
-  return {
-    address: script.address(input.hrp, serverKey).encode(),
-    pkScript: script.pkScript,
-    script,
-  }
-}
-
-// --- Cospend builders for manual settle & void refund ---
+// --- Covenant transaction builders for manual settle & void refund ---
 
 type ProgramScript = InstanceType<typeof arkade.ArkadeProgramScript>
 type CoinRef = { txid: string; vout: number; value: number | bigint; prevTx: Uint8Array }
@@ -470,7 +600,7 @@ export function settlePayouts(input: {
   writerScript: Uint8Array
 }): { payouts: { script: Uint8Array; amount: bigint }[] } | { error: string } {
   if (input.locked < input.collateral) return { error: 'underfunded' }
-  const readFee = input.readFee ?? BEACON_READ_FEE
+  const readFee = input.readFee ?? PREDICT_READ_FEE
   if (input.locked < readFee) return { error: 'fee' }
   const gross = holderPayoff(input.kind, input.price, input.strike, input.collateral)
   const split = settlementOutputs(gross, input.locked, readFee)
@@ -486,32 +616,31 @@ export function settlePayouts(input: {
   return { payouts: [{ script: input.holderScript, amount: split.holder }] }
 }
 
-export function buildSettleTx(input: {
+/** Standalone 1-input PredictVault settlement: verifies DIA + oracle signatures directly on the stack. */
+export function buildPredictSettleTx(input: {
   vault: { script: ProgramScript; coin: CoinRef }
-  beacon: { script: ProgramScript; coin: CoinRef; state: Uint8Array; id: asset.AssetId }
-  readFee: bigint
+  fixing: Pick<OracleFixing, 'price' | 'time' | 'nonce' | 'intentExpiry' | 'sig' | 'oracleSig'>
   payouts: { script: Uint8Array; amount: bigint }[]
   checkpoint: CSVMultisigTapscript.Type
 }): BuiltCospend {
-  const unitTransfer = asset.Packet.create([
-    asset.AssetGroup.create(
-      input.beacon.id,
-      null,
-      [asset.AssetInput.create(1, 1n)],
-      [asset.AssetOutput.create(0, 1n)],
-      [],
-    ),
-  ])
   return buildCovenantTx(
     [
-      { script: input.vault.script, fn: 'settle', coin: input.vault.coin },
-      { script: input.beacon.script, fn: 'read', callArgs: { selfIndex: 1n }, coin: input.beacon.coin },
+      {
+        script: input.vault.script,
+        fn: 'settle',
+        callArgs: {
+          price: input.fixing.price,
+          time: BigInt(input.fixing.time),
+          nonce: input.fixing.nonce,
+          intentExpiry: BigInt(input.fixing.intentExpiry),
+          sig: input.fixing.sig,
+          oracleSig: input.fixing.oracleSig,
+        },
+        coin: input.vault.coin,
+      },
     ],
-    [
-      { script: input.beacon.script.pkScript, amount: BigInt(input.beacon.coin.value) + input.readFee },
-      ...input.payouts,
-    ],
-    [unitTransfer, new UnknownPacket(STATE_TYPE, input.beacon.state)],
+    input.payouts,
+    [],
     input.checkpoint,
   )
 }

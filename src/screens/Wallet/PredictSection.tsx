@@ -3,7 +3,7 @@ import Glyph from '../../icons/Glyph'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { prettyFiatAmount, prettyNumber } from '../../lib/format'
 import { hapticLight } from '../../lib/haptics'
-import { BEACON_READ_FEE, getPredictConfig, type PredictKind } from '../../lib/predict/constants'
+import { getPredictConfig, type PredictKind } from '../../lib/predict/constants'
 import { fetchPredictMarket, resolveWindowLineCents, type PredictMarketSnapshot } from '../../lib/predict/marketFeed'
 import { formatCountdown, predictMultiplier, predictPayout, upcomingWindows } from '../../lib/predict/pricing'
 import { Currencies } from '../../lib/types'
@@ -66,7 +66,7 @@ export default function PredictSection() {
 
   const next = upcomingWindows(nowSec, 1)[0] ?? 0
 
-  // What a sample stake comes back as on each side, after the price check fee.
+  // What a sample stake comes back as on each side.
   const payouts = useMemo(() => {
     if (!market || !next) return null
     const { lineCents } = resolveWindowLineCents(market.samples, next, market.priceCents)
@@ -81,8 +81,7 @@ export default function PredictSection() {
     const pays = (kind: PredictKind) => {
       const multiplier = predictMultiplier({ kind, spotCents: market.priceCents, lineCents, years, vol: market.vol })
       if (multiplier == null) return null
-      const gross = predictPayout(stakeSats, multiplier)
-      return label(gross > BEACON_READ_FEE ? gross - BEACON_READ_FEE : 0n)
+      return label(predictPayout(stakeSats, multiplier))
     }
     return { stake: label(stakeSats), 2: pays(2), 3: pays(3) }
     // nowSec only matters per window, so recompute when the close or the market moves

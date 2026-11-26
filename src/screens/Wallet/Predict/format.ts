@@ -1,5 +1,4 @@
 import { prettyNumber } from '../../../lib/format'
-import { BEACON_READ_FEE } from '../../../lib/predict/constants'
 import { usdFromCents } from '../../../lib/predict/pricing'
 
 export function formatClockTime(unixSec: number): string {
@@ -10,10 +9,9 @@ export function formatSats(sats: bigint | number | string): string {
   return `${prettyNumber(Number(sats))} sats`
 }
 
-/** What the holder receives if right: the vault less the price check fee. */
+/** What the holder receives if right. */
 export function netPayout(payoutSats: bigint | string): bigint {
-  const payout = BigInt(payoutSats)
-  return payout > BEACON_READ_FEE ? payout - BEACON_READ_FEE : 0n
+  return BigInt(payoutSats)
 }
 
 /** A whole-dollar gap reads cleaner than cents once it is past a dollar. */

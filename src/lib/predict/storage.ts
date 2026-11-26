@@ -23,8 +23,9 @@ export interface PredictPosition {
   deskName: string
   deskPkHex: string
   backupPkHex: string
-  beaconTxid: string
-  beaconGidx: number
+  oraclePkHex: string
+  beaconTxid?: string
+  beaconGidx?: number
   intentAddress: string
   vaultAddress: string
   phase: PredictPositionPhase

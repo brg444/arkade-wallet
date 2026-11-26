@@ -1,7 +1,7 @@
-import { ArkAddress, asset, type IWallet } from '@arkade-os/sdk'
+import { ArkAddress, type IWallet } from '@arkade-os/sdk'
 import { sendOffChain } from '../asp'
-import { BEACON_READ_FEE, PAIR, PREDICT_LOCK_S, QUOTE_TTL_S, type PredictConfig, type PredictKind } from './constants'
-import { backupKeyMatches, beaconIdOf, bindPredictContracts, parseOracleBeacon, verifiedSignerKey } from './contracts'
+import { PAIR, PREDICT_LOCK_S, PREDICT_READ_FEE, QUOTE_TTL_S, type PredictConfig, type PredictKind } from './constants'
+import { backupKeyMatches, bindPredictContracts, oracleKeyMatches, verifiedSignerKey } from './contracts'
 import { registerPredictExecutorDelegations } from './executor'
 import { bytesToHex, hexToBytes, xOnly } from './hex'
 import {
@@ -44,8 +44,7 @@ export interface PredictQuote {
   voidAfter: number
   fallbackDelay: number
   finalExitDelay: number
-  beaconTxid: string
-  beaconGidx: number
+  oraclePkHex: string
   intentAddress: string
   vaultAddress: string
 }
@@ -74,7 +73,7 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
     mode: 'live',
 
     async requestQuote(input) {
-      const { profile, desks, relays, backupPubkey, beacon } = config
+      const { profile, desks, relays, backupPubkey, oraclePubkey } = config
       const names = new Map(desks.map((d) => [d.pubkey.toLowerCase(), d.name]))
       const decoded = ArkAddress.decode(input.holderAddress)
       if (decoded.hrp !== profile.hrp) {
@@ -139,7 +138,7 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
         if (q.profile.void_after !== Number(profile.voidAfter)) continue
         if (q.profile.fallback_delay !== Number(profile.fallbackDelay)) continue
         if (q.profile.final_exit_delay !== Number(profile.finalExitDelay)) continue
-        if (!parseOracleBeacon(beacon, q.profile.beacon_txid, q.profile.beacon_gidx, profile.hrp).ok) continue
+        if (!oracleKeyMatches(q.profile.oracle_pubkey, oraclePubkey)) continue
         if (
           !backupKeyMatches(
             q.profile.backup_pubkey,
@@ -152,7 +151,7 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
           continue
         }
         const payoutSats = BigInt(q.to_amount)
-        if (payoutRefusal(payoutSats, input.stakeSats, BEACON_READ_FEE, profile.qMax)) continue
+        if (payoutRefusal(payoutSats, input.stakeSats, PREDICT_READ_FEE, profile.qMax)) continue
 
         let bound
         try {
@@ -167,12 +166,12 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
             writerPk: hexToBytes(q.profile.writer_pubkey),
             holderPk: signerKey ?? payoutKey,
             holderPayoutKey: signerKey ? undefined : payoutKey,
+            oraclePk: hexToBytes(q.profile.oracle_pubkey),
             backupPk: hexToBytes(q.profile.backup_pubkey),
             voidAfter: BigInt(q.profile.void_after),
             fallbackDelay: BigInt(q.profile.fallback_delay),
             finalExitDelay: BigInt(q.profile.final_exit_delay),
-            beacon: beaconIdOf(asset.AssetId.create(q.profile.beacon_txid, q.profile.beacon_gidx)),
-            readFee: BEACON_READ_FEE,
+            readFee: PREDICT_READ_FEE,
             serverKey: client.serverKey,
             emulatorKey: client.emulatorKey,
             hrp: profile.hrp,
@@ -202,8 +201,7 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
           voidAfter: q.profile.void_after,
           fallbackDelay: q.profile.fallback_delay,
           finalExitDelay: q.profile.final_exit_delay,
-          beaconTxid: q.profile.beacon_txid,
-          beaconGidx: q.profile.beacon_gidx,
+          oraclePkHex: q.profile.oracle_pubkey,
           intentAddress: q.profile.intent_address,
           vaultAddress: q.profile.vault_address,
         })
@@ -242,12 +240,12 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
             writerPk: hexToBytes(quote.deskPkHex),
             holderPk: signerKey ?? payoutKey,
             holderPayoutKey: signerKey ? undefined : payoutKey,
+            oraclePk: hexToBytes(quote.oraclePkHex),
             backupPk: hexToBytes(quote.backupPkHex),
             voidAfter: BigInt(quote.voidAfter),
             fallbackDelay: BigInt(quote.fallbackDelay),
             finalExitDelay: BigInt(quote.finalExitDelay),
-            beacon: beaconIdOf(asset.AssetId.create(quote.beaconTxid, quote.beaconGidx)),
-            readFee: BEACON_READ_FEE,
+            readFee: PREDICT_READ_FEE,
             serverKey: client.serverKey,
             emulatorKey: client.emulatorKey,
             hrp: config.profile.hrp,
@@ -284,8 +282,7 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
         deskName: quote.deskName,
         deskPkHex: quote.deskPkHex,
         backupPkHex: quote.backupPkHex,
-        beaconTxid: quote.beaconTxid,
-        beaconGidx: quote.beaconGidx,
+        oraclePkHex: quote.oraclePkHex,
         intentAddress: quote.intentAddress,
         vaultAddress: quote.vaultAddress,
         phase: 'funded',
@@ -304,7 +301,7 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
     },
 
     async settlePosition(position) {
-      return settleLivePredictVault(position, config.profile, config.beacon)
+      return settleLivePredictVault(position, config.profile, config.oracleFixingUrl, config.oraclePubkey)
     },
 
     async refundVoidPosition(position) {
@@ -335,7 +332,7 @@ export function createDemoPredictEngine(config: PredictConfig): PredictEngine {
           vol,
         }) ?? 1.9
       const payoutSats = predictPayout(input.stakeSats, mult)
-      if (payoutRefusal(payoutSats, input.stakeSats, BEACON_READ_FEE, config.profile.qMax)) {
+      if (payoutRefusal(payoutSats, input.stakeSats, PREDICT_READ_FEE, config.profile.qMax)) {
         return { quotes: [], note: 'payout' }
       }
       const rfqId = randomRfqId()
@@ -359,8 +356,7 @@ export function createDemoPredictEngine(config: PredictConfig): PredictEngine {
             voidAfter: Number(config.profile.voidAfter),
             fallbackDelay: Number(config.profile.fallbackDelay),
             finalExitDelay: Number(config.profile.finalExitDelay),
-            beaconTxid: config.beacon.issueTxid,
-            beaconGidx: 0,
+            oraclePkHex: config.oraclePubkey,
             intentAddress: `${prefix}1demo${rfqId.slice(0, 32)}`,
             vaultAddress: `${prefix}1vlt${rfqId.slice(0, 32)}`,
           },
@@ -392,8 +388,7 @@ export function createDemoPredictEngine(config: PredictConfig): PredictEngine {
         deskName: quote.deskName,
         deskPkHex: quote.deskPkHex,
         backupPkHex: quote.backupPkHex,
-        beaconTxid: quote.beaconTxid,
-        beaconGidx: quote.beaconGidx,
+        oraclePkHex: quote.oraclePkHex,
         intentAddress: quote.intentAddress,
         vaultAddress: quote.vaultAddress,
         phase: 'funded',
@@ -417,14 +412,13 @@ export function createDemoPredictEngine(config: PredictConfig): PredictEngine {
         const settlePrice = BigInt(currentSpotCents ?? Number(position.strikeCents))
         const payout = BigInt(position.payoutSats)
         const gross = holderPayoff(position.kind, settlePrice, BigInt(position.strikeCents), payout)
-        const net = payout > BEACON_READ_FEE ? payout - BEACON_READ_FEE : 0n
         return {
           ...position,
           phase: 'settled',
           settleTxid: `setl${position.id.slice(4)}`,
           settleCents: settlePrice.toString(),
-          userPayoutSats: gross > 0n ? net.toString() : '0',
-          deskPayoutSats: gross > 0n ? '0' : net.toString(),
+          userPayoutSats: gross > 0n ? payout.toString() : '0',
+          deskPayoutSats: gross > 0n ? '0' : payout.toString(),
         }
       }
       return position
@@ -438,11 +432,10 @@ export function createDemoPredictEngine(config: PredictConfig): PredictEngine {
       const settlePrice = BigInt(currentSpotCents ?? Number(position.strikeCents))
       const payout = BigInt(position.payoutSats)
       const gross = holderPayoff(position.kind, settlePrice, BigInt(position.strikeCents), payout)
-      const net = payout > BEACON_READ_FEE ? payout - BEACON_READ_FEE : 0n
       return {
         result: 'settled',
         txid: `setl${position.id.slice(4)}`,
-        payoutSats: gross > 0n ? net : 0n,
+        payoutSats: gross > 0n ? payout : 0n,
         settleCents: settlePrice,
       }
     },
