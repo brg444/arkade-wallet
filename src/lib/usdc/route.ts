@@ -47,19 +47,27 @@ const grossRate = (deposit: number, receive: number, feeFraction: number): numbe
 /**
  * Satora bounds a swap by its Bitcoin side in sats. Returns that bound on the
  * give side, in whole units, so the composer can quote it against what the
- * person is typing. Selling USD, the bound is on the sats received after fees
- * while `rate` is the pre-fee price, so the fees are added back first:
- * giving exactly this much clears the bound.
+ * person is typing; 0 when the quote gives no price to convert it with.
+ * Selling USD, the bound is on the sats received after fees while `rate` is
+ * the pre-fee price, so the fees are added back first: the flat ones as they
+ * are, the protocol fee in proportion to the bound, since it scales with the
+ * swap. Giving exactly this much clears the bound.
  */
 export const satoraGiveLimit = (
   direction: UsdcSwapDirection,
   limitSats: bigint,
   route: RouteQuote,
-  feeSats = 0,
+  quote?: Pick<UsdcSwapQuote, 'targetAmount' | 'feeSats' | 'protocolFeeSats'>,
 ): number => {
   if (direction === 'toUsdc') return Number(limitSats) / SATS_PER_BTC
-  const grossBtc = (Number(limitSats) + feeSats) / SATS_PER_BTC
-  return route.rate > 0 ? grossBtc / route.rate : 0
+  if (!(route.rate > 0)) return 0
+  const fee = quote?.feeSats ?? 0
+  const protocol = Math.min(quote?.protocolFeeSats ?? 0, fee)
+  const grossNow = Number(quote?.targetAmount ?? 0) + fee
+  const protocolFraction = grossNow > 0 ? protocol / grossNow : 0
+  if (protocolFraction >= 1) return 0
+  const grossSats = (Number(limitSats) + fee - protocol) / (1 - protocolFraction)
+  return grossSats / SATS_PER_BTC / route.rate
 }
 
 export const fetchSatoraQuote = async (
@@ -151,7 +159,13 @@ export const executeSatoraSwap = async ({
       ? await satora.createToUsdcSwap(client, session, quote.sourceAmount, offchainAddr)
       : { record: await satora.createToArkadeSwap(client, session, quote.sourceAmount, offchainAddr) }
   const terms = satora.createdTerms(created.record)
-  assertSwapMatchesQuote(quote, terms)
+  try {
+    assertSwapMatchesQuote(quote, terms)
+  } catch (err) {
+    // never funded: keep it out of Satora's store, or reconcile adopts it
+    await satora.forgetUnfundedSwap(client, created.record.id)
+    throw err
+  }
 
   // never more than either the reviewed net figure or what Satora created
   const record: UsdcSwapRecord = {

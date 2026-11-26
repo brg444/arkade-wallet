@@ -154,6 +154,7 @@ export default function UsdcSend({ back }: { back: () => void }) {
         <Padded>
           <FlexCol gap='1.5rem'>
             <ErrorMessage error={!configured} text={t('usdc.sendUnavailable')} />
+            <ErrorMessage error={feeOverAllowance} text={t('usdc.feeTooHigh')} />
             <ErrorMessage error={Boolean(error)} text={error} />
             <InputAddress
               focus

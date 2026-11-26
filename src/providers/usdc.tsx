@@ -6,9 +6,12 @@ import { usdcAvailable } from '../lib/usdc/config'
 import { getUsdcSession, onUsdcSession, type UsdcSession } from '../lib/usdc/keys'
 import {
   USDC_SWAPS_STORAGE_KEY,
+  UsdcStoreWiped,
   isFunding,
   loadUsdcSwaps,
+  satoraWipeCount,
   saveUsdcSwap,
+  storedSatoraSwapIds,
   swapPhase,
   type UsdcSwapRecord,
 } from '../lib/usdc/swaps'
@@ -18,6 +21,7 @@ import { WalletContext } from './wallet'
 
 const BALANCE_POLL_MS = 30_000
 const SWAP_POLL_MS = 10_000
+const RECONCILE_RETRY_MS = 60_000
 const SWAP_DRIVER_LOCK = 'usdc-swap-driver'
 
 interface UsdcContextProps {
@@ -105,6 +109,44 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
     setSwaps(saveUsdcSwap(record))
   }, [])
 
+  // Once per unlock, whether or not anything is pending here: adopt swaps
+  // Satora's own store knows and this index does not (a continuation created
+  // right before a crash, an index lost to storage eviction). Satora's store
+  // is read natively first, so the chunk only loads when there is a gap.
+  useEffect(() => {
+    if (!session || !available || !arkServerUrl || !svcWallet) return
+    if (reconciledFor.current === session.address) return
+    let cancelled = false
+    const generation = satoraWipeCount()
+    const live = () => !cancelled && satoraWipeCount() === generation
+    const reconcile = async () => {
+      const ids = await storedSatoraSwapIds()
+      const known = new Set(loadUsdcSwaps().map((record) => record.id))
+      if (ids === undefined || ids.some((id) => !known.has(id))) {
+        const { satoraClient, reconcileStoredSwaps } = await import('../lib/usdc/satora')
+        if (!live()) return
+        const client = await satoraClient(session, arkServerUrl)
+        const { offchainAddr } = await getReceivingAddresses(svcWallet)
+        const adopted = await reconcileStoredSwaps(client, loadUsdcSwaps(), offchainAddr)
+        if (!live()) return
+        for (const record of adopted) saveUsdcSwap(record)
+        if (adopted.length) setSwaps(loadUsdcSwaps())
+      }
+      if (live()) reconciledFor.current = session.address
+    }
+    let retry: number | undefined
+    const attempt = () =>
+      reconcile().catch((err) => {
+        consoleError(err, 'failed to reconcile USDC swaps')
+        if (live()) retry = window.setTimeout(attempt, RECONCILE_RETRY_MS)
+      })
+    attempt()
+    return () => {
+      cancelled = true
+      window.clearTimeout(retry)
+    }
+  }, [session, available, arkServerUrl, svcWallet])
+
   // Drives every unfinished swap to its end, across reloads: claims once
   // Satora has locked its side, refunds when a swap can no longer complete,
   // and continues a refunded swap on to Arkade.
@@ -113,28 +155,34 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
     if (!session || !available || !hasPending || !arkServerUrl || !svcWallet) return
     let cancelled = false
     const drive = async () => {
-      const { satoraClient, advanceUsdcSwap, reconcileStoredSwaps } = await import('../lib/usdc/satora')
+      // A reset empties storage while a pass may still be awaiting Satora:
+      // nothing this pass holds may be written back after it, so the count is
+      // taken before the first await. A lock is different, the storage stays
+      // and so do the writes.
+      const generation = satoraWipeCount()
+      const { satoraClient, advanceUsdcSwap } = await import('../lib/usdc/satora')
+      // nor rebuild a client from a root key the reset has just dropped
+      if (satoraWipeCount() !== generation) return
       const client = await satoraClient(session, arkServerUrl)
       const { offchainAddr } = await getReceivingAddresses(svcWallet)
-      // once per unlock: adopt swaps Satora's own store knows and this index
-      // does not, such as a continuation created right before a crash
-      if (reconciledFor.current !== session.address) {
-        for (const adopted of await reconcileStoredSwaps(client, loadUsdcSwaps(), offchainAddr)) saveUsdcSwap(adopted)
-        reconciledFor.current = session.address
+      const write = (record: UsdcSwapRecord) => {
+        if (satoraWipeCount() !== generation) throw new UsdcStoreWiped()
+        saveUsdcSwap(record)
       }
       const pending = loadUsdcSwaps().filter((candidate) => swapPhase(candidate) === 'pending')
       for (const record of pending) {
-        if (cancelled) return
+        if (cancelled || satoraWipeCount() !== generation) return
         // its funding call is still out: acting on this snapshot could undo it
         if (isFunding(record.id)) continue
         try {
           const { record: next, continued } = await advanceUsdcSwap(client, record, {
-            persist: saveUsdcSwap,
+            persist: write,
             arkAddress: offchainAddr,
           })
-          saveUsdcSwap(next)
-          if (continued) saveUsdcSwap(continued)
+          write(next)
+          if (continued) write(continued)
         } catch (err) {
+          if (err instanceof UsdcStoreWiped || satoraWipeCount() !== generation) return
           consoleError(err, `failed to advance USDC swap ${record.id}`)
           // onto the stored record, not this pass's snapshot of it
           const latest = loadUsdcSwaps().find((candidate) => candidate.id === record.id) ?? record

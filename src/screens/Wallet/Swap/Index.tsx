@@ -501,6 +501,8 @@ export default function WalletSwap() {
     setPreservedAmountPair(undefined)
     setAmount('0')
     setGiveAmount('')
+    // or the flipped pair prices the old amount in the other direction
+    setSatoraGiveAmount('')
     setSwapTurn((current) => current + 1)
     setFromAssetId(toAsset.assetId)
     setToAssetId(fromAsset.assetId)
@@ -1689,20 +1691,16 @@ function satoraLimitMessage(
   route: RouteQuote,
   fromAsset: SwapAsset,
 ): string {
+  // the fees take the whole amount: there is no price left to quote a bound in
+  if (satoraQuote.targetAmount <= BigInt(0)) return 'Amount too small'
   const bitcoinSide = direction === 'toUsdc' ? satoraQuote.sourceAmount : satoraQuote.targetAmount
   if (satoraQuote.minSats > BigInt(0) && bitcoinSide < satoraQuote.minSats) {
-    return formatGiveLimit(
-      'Minimum',
-      satoraGiveLimit(direction, satoraQuote.minSats, route, satoraQuote.feeSats),
-      fromAsset,
-    )
+    const limit = satoraGiveLimit(direction, satoraQuote.minSats, route, satoraQuote)
+    return limit > 0 ? formatGiveLimit('Minimum', limit, fromAsset) : 'Amount too small'
   }
   if (satoraQuote.maxSats > BigInt(0) && bitcoinSide > satoraQuote.maxSats) {
-    return formatGiveLimit(
-      'Maximum',
-      satoraGiveLimit(direction, satoraQuote.maxSats, route, satoraQuote.feeSats),
-      fromAsset,
-    )
+    const limit = satoraGiveLimit(direction, satoraQuote.maxSats, route, satoraQuote)
+    return limit > 0 ? formatGiveLimit('Maximum', limit, fromAsset) : 'Quote unavailable'
   }
   return ''
 }

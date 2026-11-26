@@ -109,8 +109,10 @@ describe('advancing a USD swap', () => {
       [record(), record({ id: 'old', continuedTo: 'swap-9' })],
       'ark1x',
     )
+    // a continuation the index only points at is adopted too, as funded
     expect(adopted.map((swap) => [swap.id, swap.direction, swap.funded, swap.arkAddress])).toEqual([
       ['swap-2', 'toArkade', true, 'ark1dest'],
+      ['swap-9', 'toArkade', true, 'ark1dest'],
     ])
   })
 
@@ -138,5 +140,91 @@ describe('advancing a USD swap', () => {
       advanceUsdcSwap(client, { ...afterFirst, refundAttemptAt: Date.now() - 61_000 }, options),
     ).rejects.toThrow('nothing to refund yet')
     expect(client.refundSwap).toHaveBeenCalledTimes(2)
+  })
+
+  it('indexes a continuation before closing the refunded swap, so a failed read cannot strand it', async () => {
+    const client = {
+      getSwap: vi.fn(async (id: string) => {
+        if (id === 'swap-2') throw new Error('502')
+        return swapResponse({ status: 'clientrefunded' })
+      }),
+      getRefundedEvmSwapContinuation: vi.fn(async () => ({ eligible: true })),
+      continueRefundedEvmSwap: vi.fn(async () => ({ newSwapId: 'swap-2' })),
+    } as unknown as Client
+    const refunded = record({ status: 'clientrefunded', continuation: 'needed' })
+    saveUsdcSwap(refunded)
+
+    await expect(advanceUsdcSwap(client, refunded, options)).rejects.toThrow('502')
+    const stored = loadUsdcSwaps()
+    expect(stored.find((swap) => swap.id === 'swap-1')).toMatchObject({ continuation: 'done', continuedTo: 'swap-2' })
+    const stub = stored.find((swap) => swap.id === 'swap-2')
+    expect(stub).toMatchObject({ provisional: true, funded: true, direction: 'toArkade', arkAddress: 'ark1dest' })
+    expect(swapPhase(stub!)).toBe('pending')
+
+    // the next pass reads the continuation's own terms onto it
+    const live = {
+      getSwap: vi.fn(async () =>
+        swapResponse({ id: 'swap-2', status: 'clientfundingseen', source_amount: '99500', target_amount: '98000' }),
+      ),
+    } as unknown as Client
+    const { record: read } = await advanceUsdcSwap(live, stub!, options)
+    expect(read).toMatchObject({ sourceAmount: '99500', targetAmount: '98000', funded: true })
+    expect(read.provisional).toBeUndefined()
+  })
+
+  it('counts the continuation window from the refund landing, not from the first refund try', async () => {
+    vi.useFakeTimers()
+    try {
+      const start = Date.parse('2026-11-26T00:00:00Z')
+      vi.setSystemTime(start)
+      let refunded = false
+      const client = {
+        getSwap: vi.fn(async () => swapResponse({ status: refunded ? 'clientrefunded' : 'serverwontfund' })),
+        collabRefundEvmSwap: vi.fn(async () => {
+          if (!refunded) throw new Error('server down')
+          return { txHash: '0xrefund' }
+        }),
+        getRefundedEvmSwapContinuation: vi.fn(async () => ({ eligible: false, reason: 'indexing' })),
+      } as unknown as Client
+      saveUsdcSwap(record())
+
+      // the refund cannot go out yet: nothing starts the clock
+      await expect(advanceUsdcSwap(client, record(), options)).rejects.toThrow('server down')
+      const waiting = loadUsdcSwaps()[0]
+      expect(waiting).toMatchObject({ continuation: 'needed' })
+      expect(waiting.continuationSince).toBeUndefined()
+
+      // a day and more later it lands, and Satora has not indexed it yet
+      vi.setSystemTime(start + 25 * 60 * 60 * 1000)
+      refunded = true
+      const { record: after } = await advanceUsdcSwap(client, waiting, options)
+      expect(after).toMatchObject({ continuation: 'needed', continuationSince: start + 25 * 60 * 60 * 1000 })
+      expect(swapPhase(after)).toBe('pending')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refunds on its own authority once the timelock has passed and Satora will not co-sign', async () => {
+    const past = Math.floor(Date.now() / 1000) - 60
+    const future = Math.floor(Date.now() / 1000) + 3600
+    const make = (locktime: number) =>
+      ({
+        getSwap: vi.fn(async () => swapResponse({ status: 'serverwontfund', evm_refund_locktime: locktime })),
+        collabRefundEvmSwap: vi.fn(async () => {
+          throw new Error('refused')
+        }),
+        refundEvmSponsored: vi.fn(async () => ({ txHash: '0xown', userOpHash: '0xop' })),
+      }) as unknown as Client & { refundEvmSponsored: ReturnType<typeof vi.fn> }
+
+    // before the timelock, only Satora can refund: the failure stands
+    const early = make(future)
+    await expect(advanceUsdcSwap(early, record(), options)).rejects.toThrow('refused')
+    expect(early.refundEvmSponsored).not.toHaveBeenCalled()
+
+    // after it, the wallet refunds without Satora
+    const late = make(past)
+    await advanceUsdcSwap(late, record(), options)
+    expect(late.refundEvmSponsored).toHaveBeenCalledWith('swap-1')
   })
 })

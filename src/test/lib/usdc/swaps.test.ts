@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   MAX_BLIND_REFUND_ATTEMPTS,
   loadUsdcSwaps,
   mergeUsdcSwap,
   needsClaim,
   needsRefund,
+  satoraWipeCount,
   saveUsdcSwap,
+  storedSatoraSwapIds,
   swapPhase,
+  wipeSatoraData,
   type UsdcSwapRecord,
 } from '../../../lib/usdc/swaps'
 
@@ -98,5 +101,28 @@ describe('USD account swap records', () => {
         }),
       ),
     ).toBe('failed')
+  })
+})
+
+describe("Satora's store around a reset", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('counts every reset, so a pass that outlives one can tell', async () => {
+    vi.stubGlobal('indexedDB', { deleteDatabase: vi.fn() })
+    const before = satoraWipeCount()
+    await wipeSatoraData()
+    expect(satoraWipeCount()).toBe(before + 1)
+  })
+
+  it('reads no swaps, and creates nothing, when Satora never opened its store', async () => {
+    const open = vi.fn()
+    vi.stubGlobal('indexedDB', { databases: vi.fn(async () => [{ name: 'other' }]), open })
+    expect(await storedSatoraSwapIds()).toEqual([])
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('defers to Satora itself where the browser cannot list its stores', async () => {
+    vi.stubGlobal('indexedDB', { open: vi.fn() })
+    expect(await storedSatoraSwapIds()).toBeUndefined()
   })
 })

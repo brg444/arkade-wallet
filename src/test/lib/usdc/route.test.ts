@@ -49,7 +49,24 @@ describe('Satora swap rail', () => {
     // 0.001 BTC per 100 USD pre-fee
     expect(route.rate).toBeCloseTo(0.00001)
     // the bound is on sats received after fees: 10,000 net needs 11,000 gross
-    expect(satoraGiveLimit('toArkade', BigInt(10_000), route, 1_000)).toBeCloseTo(11)
+    const quote = { targetAmount: BigInt(99_000), feeSats: 1_000 }
+    expect(satoraGiveLimit('toArkade', BigInt(10_000), route, quote)).toBeCloseTo(11)
+    // a protocol fee scales with the bound: 1% of 100,000 gross is 1%, not 1,000 sats, at 10,000
+    expect(satoraGiveLimit('toArkade', BigInt(10_000), route, { ...quote, protocolFeeSats: 1_000 })).toBeCloseTo(
+      10_000 / 0.99 / 1_000,
+    )
+  })
+
+  it('gives no bound when the fees take the whole amount', () => {
+    const route = routeQuoteFromSatora('toArkade', {
+      sourceAmount: BigInt(100_000),
+      targetAmount: BigInt(0),
+      minSats: BigInt(10_000),
+      maxSats: BigInt(10_000_000),
+      feeSats: 1_000,
+    })
+    expect(route.rate).toBe(0)
+    expect(satoraGiveLimit('toArkade', BigInt(10_000), route, { targetAmount: BigInt(0), feeSats: 1_000 })).toBe(0)
   })
 
   it('refuses to fund a swap created on worse terms than the reviewed quote', () => {

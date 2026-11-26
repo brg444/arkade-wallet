@@ -46,13 +46,17 @@ export interface UsdcSwapRecord {
   refundAttempts?: number
   refundAttemptAt?: number
   continuation?: UsdcSwapContinuation
-  /** When the continuation became needed, to bound how long it is retried. */
+  /** When the refund was first seen landed with a continuation still needed,
+   * to bound how long it is retried. */
   continuationSince?: number
   /** The swap a refund was continued into. */
   continuedTo?: string
   /** Satora's EVM contracts for this swap (lowercase), so the USDC legs of a
    * swap are not listed a second time as plain transfers. */
   counterparties?: string[]
+  /** Indexed before Satora's terms for it were read (a refund continued
+   * right before a failure): its amounts are placeholders until then. */
+  provisional?: boolean
   error?: string
 }
 
@@ -197,8 +201,22 @@ export const registerSatoraLifecycle = (hooks: { forget: () => void; wipe: () =>
 /** Drops the cached Satora client, and with it the wallet root it was built from. */
 export const forgetSatoraSession = (): void => forgetSatora?.()
 
+// Bumped by every reset. A resume pass that started before one must not write
+// its records back into the storage the reset just emptied.
+let wipes = 0
+export const satoraWipeCount = (): number => wipes
+
+/** A resume pass outlived a wallet reset: whatever it held is not this wallet's. */
+export class UsdcStoreWiped extends Error {
+  constructor() {
+    super('the wallet was reset while a swap was being advanced')
+    this.name = 'UsdcStoreWiped'
+  }
+}
+
 /** Empties and deletes Satora's own database. Never throws: a reset must finish. */
 export const wipeSatoraData = async (): Promise<void> => {
+  wipes += 1
   try {
     await wipeSatora?.()
   } catch {
@@ -206,4 +224,44 @@ export const wipeSatoraData = async (): Promise<void> => {
   }
   forgetSatora?.()
   if (typeof indexedDB !== 'undefined') indexedDB.deleteDatabase(SATORA_DATABASE_NAME)
+}
+
+/**
+ * The swap ids in Satora's own store, read natively so that checking for
+ * swaps the index lacks does not load the Satora chunk. Undefined when the
+ * store cannot be read this way: the caller then asks Satora itself.
+ */
+export const storedSatoraSwapIds = async (): Promise<string[] | undefined> => {
+  if (typeof indexedDB === 'undefined') return []
+  if (typeof indexedDB.databases !== 'function') return undefined
+  try {
+    const databases = await indexedDB.databases()
+    if (!databases.some((database) => database.name === SATORA_DATABASE_NAME)) return []
+  } catch {
+    return undefined
+  }
+  return new Promise((resolve) => {
+    const request = indexedDB.open(SATORA_DATABASE_NAME)
+    // gone since it was listed: abort rather than create it empty
+    request.onupgradeneeded = () => request.transaction?.abort()
+    request.onerror = () => resolve(undefined)
+    request.onblocked = () => resolve(undefined)
+    request.onsuccess = () => {
+      const database = request.result
+      // never hold up Satora's own schema upgrade
+      database.onversionchange = () => database.close()
+      const done = (ids: string[] | undefined) => {
+        database.close()
+        resolve(ids)
+      }
+      try {
+        if (!database.objectStoreNames.contains('swaps')) return done([])
+        const keys = database.transaction('swaps', 'readonly').objectStore('swaps').getAllKeys()
+        keys.onsuccess = () => done(keys.result.map(String))
+        keys.onerror = () => done(undefined)
+      } catch {
+        done(undefined)
+      }
+    }
+  })
 }

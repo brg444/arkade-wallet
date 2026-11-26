@@ -85,6 +85,8 @@ export interface UsdcSwapQuote {
   maxSats: bigint
   /** Protocol and network fees, in sats. */
   feeSats: number
+  /** The part of {@link feeSats} that scales with the swap's size. */
+  protocolFeeSats?: number
 }
 
 type QuoteResponse = Awaited<ReturnType<Client['getQuote']>>
@@ -100,6 +102,7 @@ export const toUsdcSwapQuote = (quote: QuoteResponse, requested: bigint): UsdcSw
   minSats: toBigInt(quote.min_amount),
   maxSats: toBigInt(quote.max_amount),
   feeSats: (quote.protocol_fee ?? 0) + (quote.network_fee ?? 0) + (quote.gasless_network_fee ?? 0),
+  protocolFeeSats: quote.protocol_fee ?? 0,
 })
 
 type QuoteChain = Parameters<Client['getQuote']>[0]['sourceChain']
@@ -258,21 +261,35 @@ const recordFromSwap = (swap: AnySwap, arkAddress: string): UsdcSwapRecord | und
 /**
  * Swaps Satora's store knows that the wallet's own index does not: a swap
  * created (or a refund continued) right before a crash or a dropped response.
- * They are adopted so the resume loop drives them like any other.
+ * They are adopted so the resume loop drives them like any other. Matched on
+ * the index's own ids only: a record pointing at a continuation does not mean
+ * the continuation itself is indexed.
  */
 export const reconcileStoredSwaps = async (
   client: Client,
   known: UsdcSwapRecord[],
   arkAddress: string,
 ): Promise<UsdcSwapRecord[]> => {
-  const knownIds = new Set(known.flatMap((record) => [record.id, record.continuedTo ?? record.id]))
+  const knownIds = new Set(known.map((record) => record.id))
+  const continuations = new Set(known.flatMap((record) => (record.continuedTo ? [record.continuedTo] : [])))
   const adopted: UsdcSwapRecord[] = []
   for (const stored of await client.listAllSwaps()) {
     if (knownIds.has(stored.swapId)) continue
     const record = recordFromSwap(stored.response, arkAddress)
-    if (record) adopted.push(record)
+    // a continuation is funded from the refund by the time it exists
+    if (record) adopted.push(continuations.has(record.id) ? { ...record, funded: true } : record)
   }
   return adopted
+}
+
+/** Drops a swap Satora created that was never funded, so reconcile does not
+ * adopt it later. Never throws: the swap is harmless either way. */
+export const forgetUnfundedSwap = async (client: Client, swapId: string): Promise<void> => {
+  try {
+    await client.deleteSwap(swapId)
+  } catch {
+    // left in Satora's store; it expires unfunded
+  }
 }
 
 export interface AdvanceOptions {
@@ -285,22 +302,26 @@ export interface AdvanceOptions {
 /**
  * Swaps a refunded USD → Bitcoin swap's lock token on to Arkade. The record
  * stays `needed` (and so pending) through every failure here, so the next
- * pass tries again; it only gives up once Satora has said for a full day that
- * there is nothing left to continue.
+ * pass tries again; it only gives up once Satora has said for a full day,
+ * counted from the first pass after the refund landed, that there is nothing
+ * left to continue.
  */
 const continueRefund = async (
   client: Client,
   record: UsdcSwapRecord,
   { persist, arkAddress }: AdvanceOptions,
 ): Promise<{ record: UsdcSwapRecord; continued?: UsdcSwapRecord }> => {
+  const since = record.continuationSince ?? Date.now()
+  // the window opens the first time the refund is seen landed
+  if (record.continuationSince === undefined) persist({ ...record, continuationSince: since })
   const info = await client.getRefundedEvmSwapContinuation(record.id)
   if (!info.eligible) {
-    const since = record.continuationSince ?? record.updatedAt
     const gaveUp = Date.now() - since > CONTINUATION_WINDOW_MS
     return {
       record: {
         ...record,
         continuation: gaveUp ? 'unavailable' : 'needed',
+        continuationSince: since,
         error: info.reason ?? 'refund cannot be continued yet',
         updatedAt: Date.now(),
       },
@@ -308,18 +329,53 @@ const continueRefund = async (
   }
   const destination = record.arkAddress || arkAddress
   const continuation = await client.continueRefundedEvmSwap(record.id, { targetAddress: destination, target: 'arkade' })
-  // saved before anything else can fail: the refund is spent from here on
+  // The refund is spent from here on. The new swap is indexed before the old
+  // one is closed, so no failure past this point can leave it untracked.
+  const now = Date.now()
+  persist({
+    id: continuation.newSwapId,
+    direction: 'toArkade',
+    createdAt: now,
+    updatedAt: now,
+    sourceAmount: record.sourceAmount,
+    targetAmount: record.targetAmount,
+    status: 'pending',
+    arkAddress: destination,
+    funded: true,
+    provisional: true,
+  })
   const done: UsdcSwapRecord = {
     ...record,
     continuation: 'done',
+    continuationSince: since,
     continuedTo: continuation.newSwapId,
     error: undefined,
-    updatedAt: Date.now(),
+    updatedAt: now,
   }
   persist(done)
   // the new swap's own terms, not the ones the refunded swap was quoted at
   const created = recordFromSwap(await client.getSwap(continuation.newSwapId, { updateStorage: true }), destination)
   return { record: done, continued: created ? { ...created, funded: true } : undefined }
+}
+
+/** Satora's refund timelock on the EVM side has passed. */
+const evmTimelockPassed = (swap: AnySwap, now = Date.now()): boolean => {
+  const locktime = (swap as { evm_refund_locktime?: number }).evm_refund_locktime
+  return typeof locktime === 'number' && locktime > 0 && now / 1000 >= locktime
+}
+
+/**
+ * Refunds an EVM-sourced swap: collaboratively with Satora, and once the
+ * HTLC's timelock has passed, on this key's own authority when Satora will
+ * not co-sign. Either way the lock token lands in this account.
+ */
+const refundEvmSide = async (client: Client, swapId: string, swap: AnySwap): Promise<void> => {
+  try {
+    await client.collabRefundEvmSwap(swapId)
+  } catch (err) {
+    if (!evmTimelockPassed(swap)) throw err
+    await client.refundEvmSponsored(swapId)
+  }
 }
 
 /**
@@ -337,6 +393,20 @@ export const advanceUsdcSwap = async (
   const { persist, arkAddress } = options
   const swap = await client.getSwap(record.id, { updateStorage: true })
   let next: UsdcSwapRecord = { ...record, status: swap.status, updatedAt: Date.now(), error: undefined }
+  // indexed before its terms were read: take them now
+  if (record.provisional) {
+    const terms = recordFromSwap(swap, record.arkAddress || arkAddress)
+    if (terms) {
+      next = {
+        ...next,
+        sourceAmount: terms.sourceAmount,
+        targetAmount: terms.targetAmount,
+        createdAt: terms.createdAt,
+        counterparties: terms.counterparties,
+        provisional: undefined,
+      }
+    }
+  }
   // Satora can know about the funding when the wallet does not (a reload
   // mid-send): trust its status, and its record of the funding transaction
   // even on a swap it has since expired
@@ -369,9 +439,11 @@ export const advanceUsdcSwap = async (
     // An EVM-sourced refund returns the HTLC's lock token, not USDC. The need
     // to swap it on is recorded before the refund goes out, so a crash or a
     // failed continuation after it never leaves the token stranded unseen.
-    next = { ...next, continuation: 'needed', continuationSince: next.continuationSince ?? Date.now() }
+    // The day it may keep trying is counted from the refund, not from here:
+    // the refund itself can take many passes.
+    next = { ...next, continuation: 'needed' }
     persist(next)
-    await client.collabRefundEvmSwap(next.id)
+    await refundEvmSide(client, next.id, swap)
     const after = await client.getSwap(next.id, { updateStorage: true })
     next = { ...next, status: after.status, funded: true, updatedAt: Date.now() }
     persist(next)
