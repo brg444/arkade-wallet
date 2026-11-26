@@ -37,6 +37,7 @@ import {
   type PredictTerms,
 } from './contracts'
 import { bytesToHex, hexToBytes, xOnly } from './hex'
+import { holderPayoff, settlementOutputs } from './pricing'
 import type { PredictPosition, PredictPositionPhase } from './storage'
 
 export interface CoinView {
@@ -318,113 +319,245 @@ function termsFromPosition(
   }
 }
 
+export interface RefreshLivePositionDeps {
+  indexer?: Pick<RestIndexerProvider, 'getVtxos' | 'getVirtualTxs'>
+  fetchFixing?: typeof fetchOracleFixing
+}
+
+interface CoinSpendFlags {
+  isSpent?: boolean
+  spentBy?: string
+  settledBy?: string
+  arkTxId?: string
+}
+
+function isCoinSpent(coin: CoinSpendFlags): boolean {
+  return Boolean(coin.isSpent || coin.spentBy || coin.settledBy || coin.arkTxId)
+}
+
+function coinCreatedMs(coin: { createdAt?: Date | number | string }): number {
+  if (coin.createdAt instanceof Date) return coin.createdAt.getTime()
+  if (typeof coin.createdAt === 'number') return coin.createdAt
+  if (typeof coin.createdAt === 'string') {
+    const parsed = Number(coin.createdAt)
+    return Number.isFinite(parsed) ? parsed : Date.parse(coin.createdAt) || 0
+  }
+  return 0
+}
+
 export async function refreshLivePosition(
   pos: PredictPosition,
   profile: PredictNetworkProfile,
+  oracleFixingUrl?: string,
+  deps?: RefreshLivePositionDeps,
 ): Promise<PredictPosition> {
-  const indexer = new RestIndexerProvider(profile.arkUrl)
+  const indexer = deps?.indexer ?? new RestIndexerProvider(profile.arkUrl)
+  const fetchFixing = deps?.fetchFixing ?? fetchOracleFixing
   const holderScript = pkScriptHex(pos.holderAddress)
-  const vaultScript = pkScriptHex(pos.vaultAddress)
-  const intentScript = pkScriptHex(pos.intentAddress)
+  const vaultScript = pos.vaultAddress ? pkScriptHex(pos.vaultAddress) : ''
 
-  const intentPage = await indexer.getVtxos({ scripts: [intentScript] })
-  const coins: CoinView[] = (intentPage.vtxos ?? []).map((coin) => ({
-    value: BigInt(coin.value),
-    spent: Boolean(coin.isSpent || coin.spentBy),
-    spentBy: coin.arkTxId || coin.spentBy || '',
-    txid: coin.txid || '',
-  }))
-
-  const spentIds = [...new Set(coins.flatMap((c) => (c.spent && c.spentBy ? [c.spentBy] : [])))]
-  const spends: Record<string, TxOutput[]> = {}
-  if (spentIds.length > 0) {
-    const page = await indexer.getVirtualTxs(spentIds)
-    const byId = virtualTxsById(page.txs ?? [])
-    for (const id of spentIds) {
-      const raw = byId.get(id.toLowerCase())
-      if (!raw) continue
-      try {
-        spends[id] = psbtOutputs(raw)
-      } catch {
-        // ignore non-PSBT checkpoint ids
-      }
+  let intentScript = ''
+  if (pos.intentAddress) {
+    try {
+      intentScript = pkScriptHex(pos.intentAddress)
+    } catch {
+      intentScript = ''
     }
   }
 
-  const view = classifyPredictIntent({
-    coins,
-    spends,
-    collateral: BigInt(pos.payoutSats),
-    stake: BigInt(pos.stakeSats),
-    holderScript,
-    vaultScript,
-    now: Math.floor(Date.now() / 1000),
-    deadline: pos.deadline,
-  })
-
-  let phase: PredictPositionPhase = view.phase
+  let phase: PredictPositionPhase = pos.phase
+  let refundable = pos.refundable
+  let fundingTxid = pos.fundingTxid
   let fillTxid = pos.fillTxid
+  let closeTxid = pos.closeTxid
   let settleTxid = pos.settleTxid
   let settleCents = pos.settleCents
   let userPayoutSats = pos.userPayoutSats
   let deskPayoutSats = pos.deskPayoutSats
 
-  if (view.phase === 'filled' && view.closeTxid) {
-    fillTxid = view.closeTxid
-  }
+  const alreadyFilledOrSettled = pos.phase === 'filled' || pos.phase === 'settled'
 
-  // Check vault vtxos directly too (covers Nostr-replayed filled positions even if intent history aged out).
-  if (phase === 'filled' || pos.phase === 'filled' || pos.phase === 'settled') {
-    const vaultPage = await indexer.getVtxos({ scripts: [vaultScript] })
-    const spentVault = (vaultPage.vtxos ?? []).find((c) => c.isSpent || c.spentBy)
-    if (spentVault) {
-      const txid = cleanTxid(spentVault.arkTxId || spentVault.spentBy)
-      if (txid) {
-        settleTxid = txid
-        phase = 'settled'
-        try {
-          const txPage = await indexer.getVirtualTxs([txid])
-          const raw = virtualTxsById(txPage.txs ?? []).get(txid)
-          if (raw) {
-            let deskScript: string | undefined
-            try {
-              if (pos.deskPkHex) {
-                const serverKey = ArkAddress.decode(pos.holderAddress).serverPubKey
-                const exit = BigInt(pos.exit || Number(profile.exit))
-                deskScript = bytesToHex(payoutVtxo(hexToBytes(pos.deskPkHex), serverKey, exit).pkScript)
-              }
-            } catch {
-              deskScript = undefined
-            }
-            const split = splitPayouts(psbtOutputs(raw), holderScript, deskScript)
-            if (split) {
-              userPayoutSats = split.user.toString()
-              deskPayoutSats = split.desk.toString()
-            }
-            try {
-              const tx = Transaction.fromPSBT(base64.decode(raw))
-              const cents = predictSettlePriceCents(tx) ?? slotPrice(statePacketOf(tx), BigInt(pos.expiry))
-              if (cents != null) settleCents = cents.toString()
-            } catch {
-              // refund tx has no settlement witness or state packet
-            }
+  if (intentScript && pos.phase !== 'settled') {
+    try {
+      const intentPage = await indexer.getVtxos({ scripts: [intentScript] })
+      const coins: CoinView[] = (intentPage.vtxos ?? []).map((coin) => ({
+        value: BigInt(coin.value),
+        spent: isCoinSpent(coin),
+        spentBy: coin.arkTxId || coin.spentBy || coin.settledBy || '',
+        txid: coin.txid || '',
+      }))
+
+      const spentIds = [...new Set(coins.flatMap((c) => (c.spent && c.spentBy ? [c.spentBy] : [])))]
+      const spends: Record<string, TxOutput[]> = {}
+      if (spentIds.length > 0) {
+        const page = await indexer.getVirtualTxs(spentIds)
+        const byId = virtualTxsById(page.txs ?? [])
+        for (const id of spentIds) {
+          const raw = byId.get(id.toLowerCase())
+          if (!raw) continue
+          try {
+            spends[id] = psbtOutputs(raw)
+          } catch {
+            // ignore non-PSBT checkpoint ids
           }
-        } catch {
-          // keep settled phase even if details fetch fails transiently
         }
       }
-    } else if ((vaultPage.vtxos ?? []).some((c) => !c.isSpent && !c.spentBy)) {
-      phase = 'filled'
+
+      const view = classifyPredictIntent({
+        coins,
+        spends,
+        collateral: BigInt(pos.payoutSats),
+        stake: BigInt(pos.stakeSats),
+        holderScript,
+        vaultScript,
+        now: Math.floor(Date.now() / 1000),
+        deadline: pos.deadline,
+      })
+
+      if (!alreadyFilledOrSettled || view.phase === 'filled') {
+        phase = view.phase
+      }
+      refundable = view.refundable
+      fundingTxid = view.fundingTxid || fundingTxid
+      closeTxid = view.closeTxid || closeTxid
+      if (view.phase === 'filled' && view.closeTxid) {
+        fillTxid = view.closeTxid
+      }
+    } catch (err) {
+      if (!alreadyFilledOrSettled && !vaultScript) throw err
+      // Filled positions and positions with a known vault address still proceed to vault inspection.
+    }
+  }
+
+  // Check vault vtxos directly too (covers Nostr-replayed filled positions, missing intentAddress, and aged-out intents).
+  if (vaultScript && phase !== 'refunded') {
+    const vaultPage = await indexer.getVtxos({ scripts: [vaultScript] })
+    const vaultVtxos = vaultPage.vtxos ?? []
+    const collateral = BigInt(pos.payoutSats)
+    const liveVault = vaultVtxos.find(
+      (c) => !isCoinSpent(c) && !c.isSwept && !c.isUnrolled && BigInt(c.value) >= collateral,
+    )
+
+    if (liveVault) {
+      if (phase !== 'settled') phase = 'filled'
+      if (!fillTxid) {
+        const liveTxid = cleanTxid(liveVault.txid)
+        if (liveTxid) fillTxid = liveTxid
+      }
+    } else {
+      const spentVaults = vaultVtxos.filter((c) => isCoinSpent(c)).sort((a, b) => coinCreatedMs(b) - coinCreatedMs(a))
+      if (spentVaults.length > 0) {
+        phase = 'settled'
+
+        const arkTxIds: string[] = []
+        const spentByIds: string[] = []
+        const settledByIds: string[] = []
+        const seen = new Set<string>()
+        const pushUnique = (list: string[], value: string | undefined) => {
+          const id = cleanTxid(value)
+          if (!id || seen.has(id)) return
+          seen.add(id)
+          list.push(id)
+        }
+        for (const coin of spentVaults) pushUnique(arkTxIds, coin.arkTxId)
+        for (const coin of spentVaults) pushUnique(spentByIds, coin.spentBy)
+        for (const coin of spentVaults) pushUnique(settledByIds, coin.settledBy)
+
+        const virtualIds = [...arkTxIds, ...spentByIds]
+        const fallbackTxid = arkTxIds[0] || spentByIds[0] || settledByIds[0] || ''
+
+        let deskScript: string | undefined
+        try {
+          if (pos.deskPkHex) {
+            const serverKey = ArkAddress.decode(pos.holderAddress).serverPubKey
+            const exit = BigInt(pos.exit || Number(profile.exit))
+            deskScript = bytesToHex(payoutVtxo(hexToBytes(pos.deskPkHex), serverKey, exit).pkScript)
+          }
+        } catch {
+          deskScript = undefined
+        }
+
+        let matchedVirtual = false
+        if (virtualIds.length > 0) {
+          try {
+            const txPage = await indexer.getVirtualTxs(virtualIds)
+            const byId = virtualTxsById(txPage.txs ?? [])
+            for (const txid of virtualIds) {
+              const raw = byId.get(txid)
+              if (!raw) continue
+              let split: { user: bigint; desk: bigint } | null = null
+              try {
+                split = splitPayouts(psbtOutputs(raw), holderScript, deskScript)
+              } catch {
+                split = null
+              }
+              let cents: bigint | null = null
+              try {
+                const tx = Transaction.fromPSBT(base64.decode(raw))
+                cents = predictSettlePriceCents(tx) ?? slotPrice(statePacketOf(tx), BigInt(pos.expiry))
+              } catch {
+                // refund tx has no settlement witness or state packet
+              }
+              if (split || cents != null) {
+                settleTxid = txid
+                if (split) {
+                  userPayoutSats = split.user.toString()
+                  deskPayoutSats = split.desk.toString()
+                }
+                if (cents != null) settleCents = cents.toString()
+                matchedVirtual = true
+                break
+              }
+            }
+          } catch {
+            // keep settled phase even if virtual tx fetch fails transiently
+          }
+        }
+
+        if (!matchedVirtual && fallbackTxid && !settleTxid) {
+          settleTxid = fallbackTxid
+        }
+
+        if ((!settleCents || userPayoutSats === undefined) && oracleFixingUrl && pos.oraclePkHex) {
+          try {
+            const fetched = await fetchFixing(oracleFixingUrl, pos.expiry, pos.oraclePkHex)
+            if (fetched.fixing) {
+              const cents = fetched.fixing.cents
+              if (!settleCents) settleCents = cents.toString()
+              if (userPayoutSats === undefined) {
+                const locked = spentVaults.reduce(
+                  (best, coin) => (BigInt(coin.value) > best ? BigInt(coin.value) : best),
+                  collateral,
+                )
+                const gross = holderPayoff(pos.kind, cents, BigInt(pos.strikeCents), collateral)
+                const split = settlementOutputs(gross, locked, PREDICT_READ_FEE)
+                if (split.mode === 'holder') {
+                  userPayoutSats = split.holder.toString()
+                  deskPayoutSats = '0'
+                } else if (split.mode === 'writer') {
+                  userPayoutSats = '0'
+                  deskPayoutSats = split.writer.toString()
+                } else {
+                  userPayoutSats = split.holder.toString()
+                  deskPayoutSats = split.writer.toString()
+                }
+              }
+            }
+          } catch {
+            // keep settled phase even if oracle fixing fetch fails transiently
+          }
+        }
+      }
     }
   }
 
   return {
     ...pos,
     phase,
-    refundable: view.refundable,
-    fundingTxid: view.fundingTxid || pos.fundingTxid,
+    refundable,
+    fundingTxid,
     fillTxid,
-    closeTxid: view.closeTxid || pos.closeTxid,
+    closeTxid,
     settleTxid,
     settleCents,
     userPayoutSats,
@@ -442,7 +575,7 @@ export async function cancelLivePredictIntent(
   const bound = bindPredictContracts(terms)
   const intent = client.contract(intentProgram(), bound.intent)
   const page = await indexer.getVtxos({ scripts: [bytesToHex(bound.intentPkScript)], spendableOnly: true })
-  const coins = (page.vtxos ?? []).filter((c) => !c.isSpent && !c.spentBy && BigInt(c.value) > DUST_SATS)
+  const coins = (page.vtxos ?? []).filter((c) => !isCoinSpent(c) && BigInt(c.value) > DUST_SATS)
   if (!coins.length) throw new Error('No refundable coin found on this prediction address')
   let lastTxid = ''
   for (const coin of coins) {
@@ -475,11 +608,11 @@ export async function settleLivePredictVault(
 
   const vaultScriptHex = bytesToHex(bound.vaultPkScript)
   const live = await indexer.getVtxos({ scripts: [vaultScriptHex], spendableOnly: true })
-  const vaults = (live.vtxos ?? []).filter((c) => !c.isSpent && !c.spentBy && BigInt(c.value) >= terms.collateral)
+  const vaults = (live.vtxos ?? []).filter((c) => !isCoinSpent(c) && BigInt(c.value) >= terms.collateral)
   if (!vaults.length) {
     const hist = await indexer.getVtxos({ scripts: [vaultScriptHex], spentOnly: true })
     const gone = (hist.vtxos ?? [])[0]
-    if (gone) return { result: 'settled', txid: cleanTxid(gone.arkTxId || gone.spentBy) }
+    if (gone) return { result: 'settled', txid: cleanTxid(gone.arkTxId || gone.spentBy || gone.settledBy) }
     return { result: 'waiting' }
   }
   const vaultCoin = vaults.find((c) => c.txid === pos.fillTxid) ?? vaults[0]!
@@ -553,7 +686,7 @@ export async function refundLivePredictVault(
 
   const vaultScriptHex = bytesToHex(bound.vaultPkScript)
   const live = await indexer.getVtxos({ scripts: [vaultScriptHex], spendableOnly: true })
-  const liveVaults = (live.vtxos ?? []).filter((c) => !c.isSpent && !c.spentBy && BigInt(c.value) >= terms.stake)
+  const liveVaults = (live.vtxos ?? []).filter((c) => !isCoinSpent(c) && BigInt(c.value) >= terms.stake)
   if (!liveVaults.length) return { result: 'waiting' }
   const vaultCoin = liveVaults.find((c) => c.txid === pos.fillTxid) ?? liveVaults[0]!
 
@@ -597,7 +730,7 @@ export async function reboardLivePredictVault(
   const bound = bindPredictContracts(terms)
   const contract = client.contract(predictVaultProgram(), bound.vault)
   const page = await indexer.getVtxos({ scripts: [bytesToHex(bound.vaultPkScript)] })
-  const coins = (page.vtxos ?? []).filter((c) => !c.isSpent && !c.spentBy)
+  const coins = (page.vtxos ?? []).filter((c) => !isCoinSpent(c))
   const target = (pos.fillTxid ? coins.find((c) => c.txid === pos.fillTxid) : undefined) ?? coins[0]
   if (!target) return { result: 'missing' }
   const res = await arkade.renewProgramContractOutputs(client, [{ contract, coin: target as never, fn: 'reboard' }])
