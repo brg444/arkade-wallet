@@ -37,6 +37,26 @@ nobody deposits from the wrong network.
 
 The Satora and ZeroDev code paths load in their own chunk, only when the USD screens need them.
 
+## Fund safety
+
+- **Before funding.** Creating a swap prices it afresh, so the created swap is checked against the reviewed
+  quote first: it must ask for exactly the reviewed amount and pay out no less than the reviewed figure,
+  within 1%. Otherwise nothing is sent and the composer asks for a fresh review.
+- **Around funding.** The record is saved, marked as attempting funding, before the funding call goes out,
+  and the resume loop is held off it until the call returns. `funded` only ever moves forward when two
+  writers save the same record. A funding call that fails where the wallet cannot tell whether it landed
+  closes the review and points at the USD activity, and Confirm is never offered a second time for it.
+- **After funding.** A swap that only attempted funding is still refunded when it cannot complete, for a
+  bounded number of tries, and Satora's own record of the funding transaction counts even on a swap it
+  has expired. A refunded USD to Bitcoin swap stays pending until its refund has been swapped on to
+  Arkade: that need is recorded before the refund goes out and retried for a day. On unlock the index is
+  reconciled against Satora's own store, so a swap created right before a crash is adopted.
+- **Sends.** Scanned codes are parsed as EIP-681: the payee comes from the `address` parameter of a USDC
+  payment request, never the token contract, and a code naming another chain or token is refused. The
+  USDC contract and the zero address are never accepted as recipients. A send is only offered once its
+  fee is quoted, fits the balance and fits the 1 USDC paymaster approval.
+- **One driver.** One tab drives swaps at a time (`navigator.locks`); the others follow through storage.
+
 ## Configuration
 
 All runtime, through the Docker entrypoint like the other `VITE_*` variables.
@@ -54,5 +74,6 @@ The CSP sets no `connect-src`, so none of these origins needs a header change.
 
 ## Reset
 
-A wallet reset drops the account's swap records with the rest of localStorage and deletes Satora's
-IndexedDB (`lendaswap-v3`), which holds the per-swap secrets.
+Locking drops the key and the Satora client built from the wallet root. A reset also empties Satora's
+stores through the client's own handles, deletes its IndexedDB (`lendaswap-v3`, the per-swap secrets),
+and drops the account's swap records with the rest of localStorage.

@@ -8,7 +8,7 @@ import { getReceivingAddresses, sendOffChain } from '../asp'
 import type { RouteQuote } from '../swapRoute'
 import type { UsdcSession } from './keys'
 import type { UsdcSwapQuote } from './satora'
-import type { UsdcSwapDirection, UsdcSwapRecord } from './swaps'
+import { beginFunding, endFunding, type UsdcSwapDirection, type UsdcSwapRecord } from './swaps'
 
 const SATS_PER_BTC = 100_000_000
 const USDC_PER_USD = 1_000_000
@@ -47,12 +47,19 @@ const grossRate = (deposit: number, receive: number, feeFraction: number): numbe
 /**
  * Satora bounds a swap by its Bitcoin side in sats. Returns that bound on the
  * give side, in whole units, so the composer can quote it against what the
- * person is typing.
+ * person is typing. Selling USD, the bound is on the sats received after fees
+ * while `rate` is the pre-fee price, so the fees are added back first:
+ * giving exactly this much clears the bound.
  */
-export const satoraGiveLimit = (direction: UsdcSwapDirection, limitSats: bigint, route: RouteQuote): number => {
-  const btc = Number(limitSats) / SATS_PER_BTC
-  if (direction === 'toUsdc') return btc
-  return route.rate > 0 ? btc / route.rate : 0
+export const satoraGiveLimit = (
+  direction: UsdcSwapDirection,
+  limitSats: bigint,
+  route: RouteQuote,
+  feeSats = 0,
+): number => {
+  if (direction === 'toUsdc') return Number(limitSats) / SATS_PER_BTC
+  const grossBtc = (Number(limitSats) + feeSats) / SATS_PER_BTC
+  return route.rate > 0 ? grossBtc / route.rate : 0
 }
 
 export const fetchSatoraQuote = async (
@@ -66,10 +73,59 @@ export const fetchSatoraQuote = async (
   return direction === 'toUsdc' ? satora.quoteToUsdc(client, sourceUnits) : satora.quoteToArkade(client, sourceUnits)
 }
 
+/** How far a created swap's payout may fall short of the reviewed quote. */
+export const QUOTE_TOLERANCE_BPS = BigInt(100) // 1%
+
+/** The swap Satora created no longer matches what was reviewed. Nothing was funded. */
+export class SatoraQuoteMoved extends Error {
+  constructor() {
+    super('the swap terms changed since the quote was reviewed')
+    this.name = 'SatoraQuoteMoved'
+  }
+}
+
 /**
- * Starts a Satora swap and funds this wallet's side. Each record is saved
- * before its funding step, so a funding call that lands but never answers still
- * leaves a swap the USD account's resume loop drives to a claim or a refund.
+ * Funding went out, or may have: the call failed or timed out at a point where
+ * this wallet cannot tell. The swap is on record and the resume loop will
+ * finish or refund it, so the one thing that must not happen is a second try.
+ */
+export class SatoraFundingUncertain extends Error {
+  readonly swapId: string
+  constructor(swapId: string, cause: unknown) {
+    super('the swap may already be funded')
+    this.name = 'SatoraFundingUncertain'
+    this.swapId = swapId
+    this.cause = cause
+  }
+}
+
+/**
+ * A Satora quote carries no expiry, and creating the swap prices it afresh.
+ * Before anything is funded, the created swap must ask for exactly the amount
+ * that was reviewed and pay out no less than the reviewed figure, within
+ * {@link QUOTE_TOLERANCE_BPS}.
+ */
+export const assertSwapMatchesQuote = (
+  quote: Pick<UsdcSwapQuote, 'sourceAmount' | 'targetAmount'>,
+  created: { sourceAmount: bigint; targetAmount: bigint },
+): void => {
+  if (created.sourceAmount !== quote.sourceAmount) throw new SatoraQuoteMoved()
+  const floor = (quote.targetAmount * (BigInt(10_000) - QUOTE_TOLERANCE_BPS)) / BigInt(10_000)
+  if (created.targetAmount < floor) throw new SatoraQuoteMoved()
+}
+
+const bigMin = (a: bigint, b: bigint): bigint => (a < b ? a : b)
+
+/**
+ * Starts a Satora swap and funds this wallet's side.
+ *
+ * The created swap is checked against the reviewed quote first; a mismatch
+ * throws {@link SatoraQuoteMoved} with nothing sent. From there the record is
+ * saved, marked as attempting funding, before the funding call goes out, and
+ * the resume loop is held off it until that call returns. Any failure after
+ * that point throws {@link SatoraFundingUncertain}: the caller must not offer
+ * a retry, because the USD account's resume loop already owns the swap and
+ * will claim it or refund it.
  */
 export const executeSatoraSwap = async ({
   session,
@@ -89,23 +145,30 @@ export const executeSatoraSwap = async ({
   const satora = await import('./satora')
   const client = await satora.satoraClient(session, arkServerUrl)
   const { offchainAddr } = await getReceivingAddresses(wallet)
-  // the net figure the person was quoted, rather than Satora's pre-fee one
-  const targetAmount = quote.targetAmount.toString()
 
-  if (direction === 'toUsdc') {
-    const created = await satora.createToUsdcSwap(client, session, quote.sourceAmount, offchainAddr)
-    const record = { ...created.record, targetAmount }
-    recordSwap(record)
-    await sendOffChain(wallet, created.fundSats, created.vhtlcAddress)
-    const funded = { ...record, funded: true, updatedAt: Date.now() }
-    recordSwap(funded)
-    return funded
+  const created =
+    direction === 'toUsdc'
+      ? await satora.createToUsdcSwap(client, session, quote.sourceAmount, offchainAddr)
+      : { record: await satora.createToArkadeSwap(client, session, quote.sourceAmount, offchainAddr) }
+  const terms = satora.createdTerms(created.record)
+  assertSwapMatchesQuote(quote, terms)
+
+  // never more than either the reviewed net figure or what Satora created
+  const record: UsdcSwapRecord = {
+    ...created.record,
+    targetAmount: bigMin(quote.targetAmount, terms.targetAmount).toString(),
+    fundingAttempted: true,
   }
-
-  const created = await satora.createToArkadeSwap(client, session, quote.sourceAmount, offchainAddr)
-  const record = { ...created, targetAmount }
+  beginFunding(record.id)
   recordSwap(record)
-  await satora.fundToArkadeSwap(client, record.id)
+  try {
+    if ('vhtlcAddress' in created) await sendOffChain(wallet, created.fundSats, created.vhtlcAddress)
+    else await satora.fundToArkadeSwap(client, record.id)
+  } catch (err) {
+    throw new SatoraFundingUncertain(record.id, err)
+  } finally {
+    endFunding(record.id)
+  }
   const funded = { ...record, funded: true, updatedAt: Date.now() }
   recordSwap(funded)
   return funded

@@ -15,21 +15,20 @@ import { toast } from '../../../components/Toast'
 import { hapticSubtle } from '../../../lib/haptics'
 import { consoleError } from '../../../lib/logs'
 import { formatUsd, formatUsdc, parseUsdc } from '../../../lib/usdc/amount'
-import { usdcConfig } from '../../../lib/usdc/config'
-import { isValidEvmAddress } from '../../../lib/usdc/keys'
+import { PAYMASTER_ALLOWANCE, usdcConfig } from '../../../lib/usdc/config'
+import { isSendableRecipient, parseScannedRecipient } from '../../../lib/usdc/recipient'
 import { useTranslation } from '../../../providers/language'
 import { UsdcContext } from '../../../providers/usdc'
 
 /** Held back from "max" until the paymaster has quoted the real fee. */
 const FEE_BUFFER = BigInt(50_000) // 0.05 USDC
+/** Room left on top of the quoted fee, for gas moving before the send lands. */
+const feeWithMargin = (fee: bigint): bigint => {
+  const quarter = fee / BigInt(4)
+  return fee + (quarter > BigInt(10_000) ? quarter : BigInt(10_000))
+}
 
 type FeeState = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; fee: bigint } | { status: 'error' }
-
-/** Pulls an address out of a scanned `ethereum:` URI or returns the text as is. */
-export const addressFromScan = (data: string): string => {
-  const match = data.trim().match(/^(?:ethereum:)?(0x[0-9a-fA-F]{40})/)
-  return match ? match[1] : data.trim()
-}
 
 export default function UsdcSend({ back }: { back: () => void }) {
   const { session, balance, refresh } = useContext(UsdcContext)
@@ -45,10 +44,25 @@ export default function UsdcSend({ back }: { back: () => void }) {
   const configured = Boolean(usdcConfig().zerodevRpcUrl)
   const available = balance ?? BigInt(0)
   const amount = parseUsdc(amountText)
-  const addressValid = isValidEvmAddress(to)
+  const addressValid = isSendableRecipient(to)
   const selfSend = addressValid && session !== undefined && to.toLowerCase() === session.address.toLowerCase()
   const feeUnits = fee.status === 'ready' ? fee.fee : undefined
-  const overBalance = amount !== undefined && amount + (feeUnits ?? BigInt(0)) > available
+  // the paymaster may only pull what this send approves it for
+  const feeOverAllowance = feeUnits !== undefined && feeUnits > PAYMASTER_ALLOWANCE
+  // before the fee is known, the whole balance already leaves nothing to pay it with
+  const overBalance = amount !== undefined && amount + (feeUnits ?? BigInt(1)) > available
+  // only with a fee the person can see and the balance can cover: a send that
+  // could not be priced is not offered
+  const canSend =
+    configured &&
+    !sending &&
+    addressValid &&
+    !selfSend &&
+    !!amount &&
+    amount > BigInt(0) &&
+    fee.status === 'ready' &&
+    !feeOverAllowance &&
+    !overBalance
 
   const addressError = to && (!addressValid || selfSend) ? t('usdc.invalidAddress') : ''
   const amountError =
@@ -83,12 +97,12 @@ export default function UsdcSend({ back }: { back: () => void }) {
 
   const handleMax = () => {
     hapticSubtle()
-    const max = available - (feeUnits ?? FEE_BUFFER)
+    const max = available - (feeUnits !== undefined ? feeWithMargin(feeUnits) : FEE_BUFFER)
     setAmountText(max > BigInt(0) ? formatUsdc(max, 0).replace(/,/g, '') : '0')
   }
 
   const handleSend = async () => {
-    if (!session || !amount || !addressValid || selfSend || overBalance) return
+    if (!session || !amount || !canSend) return
     setError('')
     setSending(true)
     try {
@@ -111,7 +125,13 @@ export default function UsdcSend({ back }: { back: () => void }) {
         close={() => setScan(false)}
         label={t('usdc.recipient')}
         onData={(data) => {
-          setTo(addressFromScan(data))
+          const scanned = parseScannedRecipient(data)
+          if ('address' in scanned) {
+            setError('')
+            setTo(scanned.address)
+          } else {
+            setError(t('usdc.scanUnsupported'))
+          }
           setScan(false)
         }}
         onError={setError}
@@ -126,8 +146,6 @@ export default function UsdcSend({ back }: { back: () => void }) {
         : fee.status === 'error'
           ? t('usdc.feeUnavailable')
           : '—'
-
-  const canSend = configured && !sending && addressValid && !selfSend && !!amount && amount > BigInt(0) && !overBalance
 
   return (
     <>

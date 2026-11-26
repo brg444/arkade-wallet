@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { routeQuoteFromSatora, satoraGiveLimit, satoraSourceUnits } from '../../../lib/usdc/route'
+import {
+  SatoraQuoteMoved,
+  assertSwapMatchesQuote,
+  routeQuoteFromSatora,
+  satoraGiveLimit,
+  satoraSourceUnits,
+} from '../../../lib/usdc/route'
 
 describe('Satora swap rail', () => {
   it('turns the composer give amount into sats or USDC base units', () => {
@@ -42,6 +48,28 @@ describe('Satora swap rail', () => {
     expect(route.feeFraction).toBeCloseTo(0.01)
     // 0.001 BTC per 100 USD pre-fee
     expect(route.rate).toBeCloseTo(0.00001)
-    expect(satoraGiveLimit('toArkade', BigInt(10_000), route)).toBeCloseTo(10)
+    // the bound is on sats received after fees: 10,000 net needs 11,000 gross
+    expect(satoraGiveLimit('toArkade', BigInt(10_000), route, 1_000)).toBeCloseTo(11)
+  })
+
+  it('refuses to fund a swap created on worse terms than the reviewed quote', () => {
+    const quote = { sourceAmount: BigInt(100_000), targetAmount: BigInt(99_000_000) }
+    expect(() =>
+      assertSwapMatchesQuote(quote, { sourceAmount: BigInt(100_000), targetAmount: BigInt(99_000_000) }),
+    ).not.toThrow()
+    // a pre-fee figure above the net quote, or drift inside 1%, is fine
+    expect(() =>
+      assertSwapMatchesQuote(quote, { sourceAmount: BigInt(100_000), targetAmount: BigInt(100_500_000) }),
+    ).not.toThrow()
+    expect(() =>
+      assertSwapMatchesQuote(quote, { sourceAmount: BigInt(100_000), targetAmount: BigInt(98_500_000) }),
+    ).not.toThrow()
+    // a payout more than 1% short, or any other amount asked of the wallet
+    expect(() =>
+      assertSwapMatchesQuote(quote, { sourceAmount: BigInt(100_000), targetAmount: BigInt(97_000_000) }),
+    ).toThrow(SatoraQuoteMoved)
+    expect(() =>
+      assertSwapMatchesQuote(quote, { sourceAmount: BigInt(101_000), targetAmount: BigInt(99_000_000) }),
+    ).toThrow(SatoraQuoteMoved)
   })
 })

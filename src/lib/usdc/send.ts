@@ -23,6 +23,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum } from 'viem/chains'
 import { KERNEL_V3_3_DELEGATE, PAYMASTER_ALLOWANCE, USDC_ARBITRUM_ADDRESS, usdcConfig } from './config'
 import type { UsdcSession } from './keys'
+import { isSendableRecipient } from './recipient'
 
 const entryPoint = getEntryPoint('0.7')
 
@@ -105,6 +106,7 @@ export interface UsdcSendResult {
 
 export const sendUsdc = async (session: UsdcSession, to: string, amount: bigint): Promise<UsdcSendResult> => {
   if (amount <= BigInt(0)) throw new Error('Amount must be positive')
+  if (!isSendableRecipient(to)) throw new Error('Not an address USDC can be sent to')
   const { account, kernelClient, paymasterClient } = await buildClients(session)
   const userOpHash = await kernelClient.sendUserOperation({
     callData: await account.encodeCalls(await transferCalls(paymasterClient, to, amount)),

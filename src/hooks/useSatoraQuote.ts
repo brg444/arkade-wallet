@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useCallback, useContext, useEffect, useState } from 'react'
 import { consoleError } from '../lib/logs'
 import { fetchSatoraQuote, satoraSourceUnits } from '../lib/usdc/route'
 import type { UsdcSwapQuote } from '../lib/usdc/satora'
@@ -19,6 +19,7 @@ export function useSatoraQuote(direction: UsdcSwapDirection | undefined) {
   const { aspInfo } = useContext(AspContext)
   const { session } = useContext(UsdcContext)
   const [give, setGive] = useState('')
+  const [nonce, setNonce] = useState(0)
   const [state, setState] = useState<{
     status: SatoraQuoteStatus
     give: string
@@ -45,7 +46,10 @@ export function useSatoraQuote(direction: UsdcSwapDirection | undefined) {
     return () => {
       cancelled = true
     }
-  }, [direction, give, session, aspInfo.url])
+  }, [direction, give, nonce, session, aspInfo.url])
 
-  return { ...state, setGiveAmount: setGive }
+  /** Prices the same amount again: a Satora quote carries no expiry of its own. */
+  const refresh = useCallback(() => setNonce((current) => current + 1), [])
+
+  return { ...state, setGiveAmount: setGive, refresh }
 }

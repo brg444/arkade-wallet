@@ -44,7 +44,14 @@ import { useTranslation } from '../../../providers/language'
 import { UsdcContext } from '../../../providers/usdc'
 import { USD_ACCOUNT_ID, USDC_DECIMALS } from '../../../lib/usdc/config'
 import { resolveSwapRoute, routeQuoteFromPlan, type RouteQuote, type SwapRail } from '../../../lib/swapRoute'
-import { executeSatoraSwap, routeQuoteFromSatora, satoraGiveLimit, satoraSourceUnits } from '../../../lib/usdc/route'
+import {
+  SatoraFundingUncertain,
+  SatoraQuoteMoved,
+  executeSatoraSwap,
+  routeQuoteFromSatora,
+  satoraGiveLimit,
+  satoraSourceUnits,
+} from '../../../lib/usdc/route'
 import { useSatoraQuote } from '../../../hooks/useSatoraQuote'
 import type { UsdcSwapQuote } from '../../../lib/usdc/satora'
 import type { UsdcSwapDirection } from '../../../lib/usdc/swaps'
@@ -545,23 +552,38 @@ export default function WalletSwap() {
   }
 
   const useMaxBalance = () => {
-    // a swap draws on one rail, so USD's max is the larger of its two balances
-    const rawBalance =
+    // A swap draws on one rail, so USD's max is the largest balance among the
+    // rails that can actually reach the chosen asset: the USDC only swaps to
+    // Bitcoin, the Arkade dollars only where they have a market. Arkade
+    // dollars are entered at their own precision, so no dust is left behind
+    // as change.
+    const maxSource =
       fromAsset.assetId === USD_ACCOUNT_ID
-        ? [usdArbitrumAsset, arkadeUsdAsset].reduce(
-            (max, asset) =>
-              asset ? bigMax(max, normalizeAssetMinorUnits(assetBalanceAtomic(asset), asset.decimals, 2)) : max,
-            BigInt(0),
+        ? [
+            usdArbitrumAsset && (!toAsset || toAsset.assetId === BTC_ASSET_ID) ? usdArbitrumAsset : undefined,
+            arkadeUsdAsset && (!toAsset || findMarket(markets, arkadeUsdAsset.assetId, toAsset.assetId)?.market)
+              ? arkadeUsdAsset
+              : undefined,
+          ].reduce<SwapAsset | undefined>(
+            (best, asset) =>
+              asset &&
+              (!best ||
+                normalizeAssetMinorUnits(assetBalanceAtomic(asset), asset.decimals, USDC_DECIMALS) >
+                  normalizeAssetMinorUnits(assetBalanceAtomic(best), best.decimals, USDC_DECIMALS))
+                ? asset
+                : best,
+            undefined,
           )
-        : assetBalanceAtomic(fromAsset)
-    if (rawBalance <= BigInt(0)) return
+        : fromAsset
+    const rawBalance = maxSource ? assetBalanceAtomic(maxSource) : BigInt(0)
+    if (!maxSource || rawBalance <= BigInt(0)) return
     hapticLight()
     setConfirmError('')
     setPreservedAmountPair(undefined)
     // enter the exact balance in the asset's own units — sidestep the fiat
     // round-trip so "max" funds the whole balance to the last atomic unit
     setSelectedAmountMode('asset')
-    setAmount(atomicToUnits(rawBalance, fromAsset.decimals))
+    setAmount(atomicToUnits(rawBalance, maxSource.decimals))
   }
 
   const handleBack = () => {
@@ -615,7 +637,21 @@ export default function WalletSwap() {
       setSuccessQuote(quote)
       hapticLight()
     } catch (error) {
-      setConfirmError(extractError(error))
+      if (error instanceof SatoraFundingUncertain) {
+        // The funding call failed where this wallet cannot tell whether it
+        // landed. The swap is on record and will be finished or refunded, so
+        // Confirm must not be offered again: a second tap would fund twice.
+        consoleError(error.cause, 'Satora swap funding did not confirm')
+        setDrawer(null)
+        toast.error(t('usdc.swapUncertain'), { duration: 8000 })
+        navigate(Pages.Usdc)
+      } else if (error instanceof SatoraQuoteMoved) {
+        // nothing was sent: price it again and let the person review that
+        satora.refresh()
+        setConfirmError(t('usdc.quoteMoved'))
+      } else {
+        setConfirmError(extractError(error))
+      }
     } finally {
       setConfirming(false)
     }
@@ -1655,10 +1691,18 @@ function satoraLimitMessage(
 ): string {
   const bitcoinSide = direction === 'toUsdc' ? satoraQuote.sourceAmount : satoraQuote.targetAmount
   if (satoraQuote.minSats > BigInt(0) && bitcoinSide < satoraQuote.minSats) {
-    return formatGiveLimit('Minimum', satoraGiveLimit(direction, satoraQuote.minSats, route), fromAsset)
+    return formatGiveLimit(
+      'Minimum',
+      satoraGiveLimit(direction, satoraQuote.minSats, route, satoraQuote.feeSats),
+      fromAsset,
+    )
   }
   if (satoraQuote.maxSats > BigInt(0) && bitcoinSide > satoraQuote.maxSats) {
-    return formatGiveLimit('Maximum', satoraGiveLimit(direction, satoraQuote.maxSats, route), fromAsset)
+    return formatGiveLimit(
+      'Maximum',
+      satoraGiveLimit(direction, satoraQuote.maxSats, route, satoraQuote.feeSats),
+      fromAsset,
+    )
   }
   return ''
 }
@@ -1846,10 +1890,6 @@ function resolveInitialFromAssetId(assets: SwapAsset[], requestedAssetId?: strin
 }
 
 /** The asset's atomic balance as a bigint, whichever way SwapAsset.balance holds it. */
-function bigMax(a: bigint, b: bigint): bigint {
-  return a > b ? a : b
-}
-
 function assetBalanceAtomic(asset: SwapAsset): bigint {
   return typeof asset.balance === 'bigint' ? asset.balance : BigInt(asset.balance)
 }

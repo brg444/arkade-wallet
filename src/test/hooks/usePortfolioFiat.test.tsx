@@ -284,4 +284,17 @@ describe('usePortfolioFiat', () => {
     // only the USDC is new to the total: the Arkade dollars were already in it
     expect(result.current.totalSats).toBeCloseTo(12840.84 + 5_000)
   })
+
+  it('reports the USD account value as unavailable, not zero, when there is no rate', () => {
+    const usdc = { available: true, balance: BigInt(5_000_000) }
+    const { result } = renderHook(() => usePortfolioFiat(), {
+      wrapper: ({ children }) => (
+        <FiatContext.Provider value={{ ...mockFiatContextValue, toFiat: () => 0, toFiatAmount: () => 0 }}>
+          <UsdcContext.Provider value={usdc as any}>{children}</UsdcContext.Provider>
+        </FiatContext.Provider>
+      ),
+    })
+    const usd = result.current.rows.find((entry) => entry.assetId === USD_ACCOUNT_ID)
+    expect(usd).toMatchObject({ balance: BigInt(5_000_000), hasFiatPrice: false })
+  })
 })

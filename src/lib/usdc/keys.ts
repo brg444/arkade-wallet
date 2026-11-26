@@ -4,6 +4,7 @@ import { hex } from '@scure/base'
 import { HDKey } from '@scure/bip32'
 import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english'
+import { forgetSatoraSession } from './swaps'
 
 /**
  * The standard BIP-44 Ethereum path. Satora derives its gasless depositor key
@@ -64,13 +65,18 @@ let session: UsdcSession | undefined
 const listeners = new Set<(session: UsdcSession | undefined) => void>()
 
 export const setUsdcSessionFromMnemonic = (mnemonic: string): void => {
-  session = deriveUsdcSession(mnemonic)
+  const next = deriveUsdcSession(mnemonic)
+  // a session being replaced is wiped like one being cleared
+  if (session) session.privateKey.fill(0)
+  session = next
   listeners.forEach((listener) => listener(session))
 }
 
 export const clearUsdcSession = (): void => {
   if (session) session.privateKey.fill(0)
   session = undefined
+  // the Satora client holds the same root; it goes with the session
+  forgetSatoraSession()
   listeners.forEach((listener) => listener(undefined))
 }
 

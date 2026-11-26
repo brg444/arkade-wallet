@@ -29,7 +29,10 @@ export const readUsdcBalance = async (address: string, signal?: AbortSignal): Pr
     [{ to: USDC_ARBITRUM_ADDRESS, data: encodeBalanceOf(address) }, 'latest'],
     signal,
   )
-  return result && result !== '0x' ? BigInt(result) : BigInt(0)
+  // an empty answer means no USDC contract lives at this address on the chain
+  // the RPC serves: a misconfigured endpoint, not a balance of zero
+  if (!result || result === '0x') throw new Error('Arbitrum RPC returned no balance: is it pointed at Arbitrum One?')
+  return BigInt(result)
 }
 
 export interface UsdcTransfer {

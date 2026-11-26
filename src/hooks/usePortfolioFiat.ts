@@ -154,8 +154,12 @@ export function usePortfolioFiat(): PortfolioFiat {
     let spendableBalance = BigInt(0)
     let fiatAmount = 0
     let rowSats = 0
+    // undefined: no Arkade dollars folded in; false: one of them has no price
+    let mergedHavePrice: boolean | undefined
     for (const row of rows) {
       if (row.fiatCurrency !== Currencies.USD) continue
+      mergedHavePrice =
+        (mergedHavePrice ?? true) && row.hasFiatPrice && (row.balance === BigInt(0) || row.satsEquivalent > 0)
       row.mergedInto = USD_ACCOUNT_ID
       const owned = normalizeAssetMinorUnits(row.balance, row.decimals, USDC_DECIMALS)
       balance += owned
@@ -174,7 +178,11 @@ export function usePortfolioFiat(): PortfolioFiat {
       spendableBalance: spendableBalance + units,
       fiatAmount: fiatAmount + toFiat(satsEquivalent),
       satsEquivalent: rowSats + satsEquivalent,
-      hasFiatPrice: usdc.balance !== undefined || sources.length > 1,
+      // a balance with no rate to value it is "unavailable", not zero
+      hasFiatPrice:
+        (usdc.balance !== undefined || mergedHavePrice === true) &&
+        (units === BigInt(0) || satsEquivalent > 0) &&
+        mergedHavePrice !== false,
       fiatCurrency: Currencies.USD,
       sources,
     })

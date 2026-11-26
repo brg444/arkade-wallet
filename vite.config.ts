@@ -13,8 +13,8 @@ export default defineConfig({
       { find: '@', replacement: path.resolve(__dirname, './src') },
       // Node built-ins pulled in by the USD account's lazy chunk (Satora SDK,
       // ZeroDev): Web Crypto for `crypto`, the `events` package for EventEmitter
-      { find: /^crypto$/, replacement: path.resolve(__dirname, './src/shims/node-crypto.ts') },
-      { find: /^events$/, replacement: path.resolve(__dirname, './node_modules/events/events.js') },
+      { find: /^(node:)?crypto$/, replacement: path.resolve(__dirname, './src/shims/node-crypto.ts') },
+      { find: /^(node:)?events$/, replacement: path.resolve(__dirname, './node_modules/events/events.js') },
     ],
   },
   plugins: [

@@ -53,7 +53,7 @@ import { nsecToPrivateKey, getPrivateKey, noUserDefinedPassword } from '../lib/p
 import { hasMnemonic, getMnemonic, deriveNostrKeyFromMnemonic } from '../lib/mnemonic'
 import { usdcAvailable } from '../lib/usdc/config'
 import { clearUsdcSession, setUsdcSessionFromMnemonic } from '../lib/usdc/keys'
-import { SATORA_DATABASE_NAME } from '../lib/usdc/swaps'
+import { wipeSatoraData } from '../lib/usdc/swaps'
 import { resolveWalletMode } from '../lib/walletMode'
 import { calcBatchLifetimeMs, calcNextRollover } from '../lib/wallet'
 import { setLoadingStatus } from '../lib/loadingStatus'
@@ -1238,11 +1238,12 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     walletWiped.current = true
     loadCompleted.current = false
     setLastHomeShown(false)
+    // Satora keeps USD swap secrets in its own IndexedDB: emptied through the client's own
+    // handles while it is still alive, then dropped. Never fatal, like the swap records below.
+    await wipeSatoraData()
     clearUsdcSession()
     // clearStorage() wipes every key, so contacts and recents go with it.
     await clearStorage()
-    // Satora keeps USDC swap secrets in its own IndexedDB. Never fatal, like the swap records below.
-    if (typeof indexedDB !== 'undefined') indexedDB.deleteDatabase(SATORA_DATABASE_NAME)
     // swap records outlive localStorage now: without this a reset leaves the
     // previous wallet's swaps in the activity list. Never fatal — a reset that
     // aborted here would leave the wallet itself half-cleared, which is worse

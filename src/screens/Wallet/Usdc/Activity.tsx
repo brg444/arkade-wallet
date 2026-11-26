@@ -25,10 +25,19 @@ type Entry =
  */
 export const usdcActivityEntries = (transfers: UsdcTransfer[], swaps: UsdcSwapRecord[]): Entry[] => {
   const swapContracts = new Set(swaps.flatMap((swap) => swap.counterparties ?? []))
+  // One send is two USDC transfers in one transaction: the payment, and the
+  // gas the paymaster takes back. They are one thing to the person, so
+  // transfers sharing a transaction and a direction show as one row for the
+  // total that moved.
+  const byTx = new Map<string, UsdcTransfer>()
+  for (const transfer of transfers) {
+    if (swapContracts.has(transfer.direction === 'in' ? transfer.from : transfer.to)) continue
+    const key = `${transfer.hash}-${transfer.direction}`
+    const seen = byTx.get(key)
+    byTx.set(key, seen ? { ...seen, amount: seen.amount + transfer.amount } : transfer)
+  }
   const entries: Entry[] = [
-    ...transfers
-      .filter((transfer) => !swapContracts.has(transfer.direction === 'in' ? transfer.from : transfer.to))
-      .map((transfer) => ({ kind: 'transfer' as const, at: transfer.timestamp, transfer })),
+    ...[...byTx.values()].map((transfer) => ({ kind: 'transfer' as const, at: transfer.timestamp, transfer })),
     ...swaps.map((swap) => ({ kind: 'swap' as const, at: swap.createdAt, swap })),
   ]
   return entries.sort((a, b) => b.at - a.at).slice(0, LIMIT)

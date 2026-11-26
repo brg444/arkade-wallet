@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  MAX_BLIND_REFUND_ATTEMPTS,
   loadUsdcSwaps,
+  mergeUsdcSwap,
   needsClaim,
   needsRefund,
   saveUsdcSwap,
@@ -55,5 +57,46 @@ describe('USD account swap records', () => {
   it('survives corrupt storage', () => {
     localStorage.setItem('usdcSwaps', '{not json')
     expect(loadUsdcSwaps()).toEqual([])
+  })
+
+  it('never lets a stale snapshot undo a funding that was recorded', () => {
+    // the funding call saved funded: true while the resume loop still held
+    // the unfunded snapshot it read before; its later save must not win
+    saveUsdcSwap(record({ id: 'a', funded: true, fundingAttempted: true }))
+    saveUsdcSwap(record({ id: 'a', funded: false, status: 'pending', error: 'timeout' }))
+    expect(loadUsdcSwaps()[0]).toMatchObject({ funded: true, fundingAttempted: true, error: 'timeout' })
+    expect(
+      mergeUsdcSwap(record({ continuation: 'done', continuedTo: 'b' }), record({ continuation: 'needed' })),
+    ).toMatchObject({
+      continuation: 'done',
+      continuedTo: 'b',
+    })
+  })
+
+  it('still refunds a swap that only attempted funding, a bounded number of times', () => {
+    const attempted = record({ status: 'expired', fundingAttempted: true })
+    expect(needsRefund(attempted)).toBe(true)
+    expect(swapPhase(attempted)).toBe('pending')
+    const exhausted = { ...attempted, refundAttempts: MAX_BLIND_REFUND_ATTEMPTS }
+    expect(needsRefund(exhausted)).toBe(false)
+    expect(swapPhase(exhausted)).toBe('failed')
+  })
+
+  it('keeps a refunded swap pending until its refund has been swapped on', () => {
+    const refunded = record({ direction: 'toArkade', status: 'clientrefunded', funded: true })
+    expect(swapPhase({ ...refunded, continuation: 'needed' })).toBe('pending')
+    expect(swapPhase({ ...refunded, continuation: 'done' })).toBe('refunded')
+    expect(swapPhase({ ...refunded, continuation: 'unavailable' })).toBe('refunded')
+    // marked before a refund that then turned out to have nothing to refund
+    expect(
+      swapPhase(
+        record({
+          status: 'expired',
+          fundingAttempted: true,
+          refundAttempts: MAX_BLIND_REFUND_ATTEMPTS,
+          continuation: 'needed',
+        }),
+      ),
+    ).toBe('failed')
   })
 })
