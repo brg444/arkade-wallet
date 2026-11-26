@@ -11,7 +11,7 @@ import { ConfigContext } from '../../../providers/config'
 import { FiatContext } from '../../../providers/fiat'
 import Glyph from '../../../icons/Glyph'
 import { hapticLight } from '../../../lib/haptics'
-import { formatUsd } from '../../../lib/usdc/amount'
+import { formatUsdBalance } from '../../../lib/usdc/amount'
 import { Currencies } from '../../../lib/types'
 import { NavigationContext, Pages, holdBackLayer } from '../../../providers/navigation'
 import { FlowContext } from '../../../providers/flow'
@@ -66,7 +66,7 @@ export default function Usdc() {
   // from their own screen, one tap away in the breakdown
   const units = balance ?? BigInt(0)
   const total = typeof row?.balance === 'bigint' ? row.balance : units
-  const formattedBalance = formatUsd(total)
+  const formattedBalance = formatUsdBalance(total)
   const decimals = fiatDecimals()
   const fiatText = (amount: number) =>
     prettyFiatAmount(amount, config.currency, {
@@ -104,6 +104,12 @@ export default function Usdc() {
                     <Figure value={formattedBalance} />
                   </PrivacyAmount>
                 </div>
+                {/* the balance is already in dollars: a value is only news in another currency */}
+                {value !== undefined && config.currency !== Currencies.USD ? (
+                  <span className='text-[length:var(--asset-detail-control-size)] text-[var(--ink-3)] tabular-nums'>
+                    <PrivacyAmount masked='••••'>{value}</PrivacyAmount>
+                  </span>
+                ) : null}
               </div>
             </section>
 
@@ -128,27 +134,6 @@ export default function Usdc() {
                 {t('wallet.swap')}
               </button>
             </div>
-
-            <section className='asset-detail-holdings'>
-              <div className='asset-detail-holding'>
-                <span>{t('common.balance')}</span>
-                <strong>
-                  <PrivacyAmount masked='•••• USD'>
-                    <span className='asset-detail-holding-amount'>{formattedBalance}</span>
-                  </PrivacyAmount>
-                </strong>
-              </div>
-              <div className='asset-detail-holding'>
-                <span>{t('common.value')}</span>
-                <strong>
-                  {value === undefined ? (
-                    t('accounts.valueUnavailable')
-                  ) : (
-                    <PrivacyAmount masked='••••'>{value}</PrivacyAmount>
-                  )}
-                </strong>
-              </div>
-            </section>
 
             {sources.length > 1 ? <UsdBreakdown sources={sources} total={total} onOpen={openSource} /> : null}
 
@@ -218,7 +203,7 @@ function UsdBreakdown({
               </div>
               <div className='activity-row__right'>
                 <span className='activity-row__amount'>
-                  <PrivacyAmount masked='•••• USD'>{formatUsd(source.balance)}</PrivacyAmount>
+                  <PrivacyAmount masked='•••• USD'>{formatUsdBalance(source.balance)}</PrivacyAmount>
                 </span>
               </div>
             </>

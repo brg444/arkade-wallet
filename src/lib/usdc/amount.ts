@@ -33,3 +33,12 @@ export const usdcToNumber = (units: bigint): number => Number(units) / Number(UN
  * other USD account in the wallet does ("12.50 USD"), never as a token.
  */
 export const formatUsd = (units: bigint): string => `${formatUsdc(units)} USD`
+
+const CENT = UNIT / BigInt(100)
+
+/**
+ * A balance as people read dollars: whole cents, rounded down so a balance is
+ * never shown as more than is there ("10.24 USD" for 10.249530). Amounts that
+ * move (sends, fees, activity) keep {@link formatUsd}'s full precision.
+ */
+export const formatUsdBalance = (units: bigint): string => formatUsd((units / CENT) * CENT)
