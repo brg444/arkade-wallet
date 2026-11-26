@@ -23,6 +23,7 @@ import WalletSwap from '../screens/Wallet/Swap/Index'
 import Settings from '../screens/Settings/Index'
 
 const Predict = lazy(() => import('../screens/Wallet/Predict/Index'))
+const Usdc = lazy(() => import('../screens/Wallet/Usdc/Index'))
 
 import InitSuccess from '../screens/Init/Success'
 import AppAssets from '../screens/Apps/Assets/Index'
@@ -80,6 +81,8 @@ export enum Pages {
   Wallet,
   WalletScan,
   WalletSwap,
+  // appended, not alphabetical: page values are numeric
+  Usdc,
 }
 
 const ROOT_PAGES = new Set([Pages.Wallet])
@@ -180,6 +183,12 @@ export const pageComponent = (page: Pages): JSX.Element => {
       return <Unavailable />
     case Pages.Unlock:
       return <Unlock />
+    case Pages.Usdc:
+      return (
+        <Suspense fallback={<LoadingLogo />}>
+          <Usdc />
+        </Suspense>
+      )
     case Pages.Vtxos:
       return <Vtxos />
     case Pages.Wallet:

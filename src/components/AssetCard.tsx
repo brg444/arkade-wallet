@@ -26,6 +26,9 @@ interface AssetCardProps {
   fiatText?: string
   /** Preserve every asset decimal on payment confirmations. */
   exactAmount?: boolean
+  /** The row is not an Arkade asset (the Arbitrum USDC account), so there is
+   * no asset id to verify and its ticker is trusted as given. */
+  trusted?: boolean
   onClick?: () => void
 }
 
@@ -43,6 +46,7 @@ export default function AssetCard({
   logoTicker,
   fiatText,
   exactAmount = false,
+  trusted = false,
   onClick,
 }: AssetCardProps) {
   const { config } = useContext(ConfigContext)
@@ -58,7 +62,7 @@ export default function AssetCard({
   const bitcoinUnit = config.unit
   // an empty assetId means the native bitcoin row; any other asset only gets
   // currency treatment (official logo, fiat-style formatting) when its ID is verified
-  const trustedTicker = !assetId || isVerifiedAsset(assetId) ? tokenTick : undefined
+  const trustedTicker = trusted || !assetId || isVerifiedAsset(assetId) ? tokenTick : undefined
   const isBitcoin = trustedTicker?.toUpperCase() === 'BTC'
   const prettyBalance = isBitcoin
     ? prettyBitcoinAmount(Number(rawBalance), bitcoinUnit)
@@ -77,7 +81,7 @@ export default function AssetCard({
   // the logo lookup is decoupled from the amount ticker so a designated
   // currency can show its flag while the balance stays asset-denominated;
   // still gated on verification, same as the amount-side trustedTicker
-  const trustedLogoTicker = !assetId || isVerifiedAsset(assetId) ? (logoTicker ?? tokenTick) : undefined
+  const trustedLogoTicker = trusted || !assetId || isVerifiedAsset(assetId) ? (logoTicker ?? tokenTick) : undefined
   const tokenLogoTicker = tokenLogoTickerForTicker(trustedLogoTicker)
   const renderedAvatar = tokenLogoTicker ? (
     <span className='asset-card__logo' aria-hidden='true'>

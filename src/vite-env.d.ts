@@ -14,6 +14,12 @@ interface ImportMetaEnv {
   readonly VITE_SOLVER_REGISTRY_URL?: string
   readonly VITE_LNURL_SERVER?: string
   readonly VITE_LNURL_DOMAIN?: string
+  readonly VITE_USDC_ENABLED?: string
+  readonly VITE_ARBITRUM_RPC_URL?: string
+  readonly VITE_ZERODEV_PROJECT_ID?: string
+  readonly VITE_SATORA_API_URL?: string
+  readonly VITE_USDC_HISTORY_URL?: string
+  readonly VITE_USDC_HISTORY_API_KEY?: string
   // Add other env variables as needed
 }
 

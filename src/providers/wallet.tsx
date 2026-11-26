@@ -51,6 +51,9 @@ import { lnurlResyncOnPayment, syncLnurlActivity } from '../lib/lnurlActivitySyn
 import { assetSwapRepository, type WalletAssetSwap } from '../lib/swapRepository'
 import { nsecToPrivateKey, getPrivateKey, noUserDefinedPassword } from '../lib/privateKey'
 import { hasMnemonic, getMnemonic, deriveNostrKeyFromMnemonic } from '../lib/mnemonic'
+import { usdcAvailable } from '../lib/usdc/config'
+import { clearUsdcSession, setUsdcSessionFromMnemonic } from '../lib/usdc/keys'
+import { wipeSatoraData } from '../lib/usdc/swaps'
 import { resolveWalletMode } from '../lib/walletMode'
 import { calcBatchLifetimeMs, calcNextRollover } from '../lib/wallet'
 import { setLoadingStatus } from '../lib/loadingStatus'
@@ -1092,6 +1095,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       pubkey = hex.encode(secp256k1.getPublicKey(credentials.privateKey))
       walletMode = 'static'
       initialiseNostrBackup(credentials.privateKey)
+      clearUsdcSession()
       updateConfig({ ...config, pubkey, walletMode })
     } else {
       throw new Error('Either mnemonic or privateKey must be provided')
@@ -1105,6 +1109,15 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       restoring: credentials.restoring,
     })
     if (!didInit) return
+    // Derive the USD session only once the wallet itself started, so a failed
+    // or aborted unlock never leaves EVM key material live while locked.
+    if (credentials.mnemonic && usdcAvailable(network, true)) {
+      try {
+        setUsdcSessionFromMnemonic(credentials.mnemonic)
+      } catch (err) {
+        consoleError(err, 'failed to derive the USDC account key')
+      }
+    }
     updateWallet({ ...wallet, network, pubkey })
     setInitialized(true)
   }
@@ -1125,6 +1138,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         await initWallet({ privateKey })
       }
     } catch (err) {
+      clearUsdcSession()
       setAuthState('locked')
       // The password was right and the wallet then failed to start. App has already left Unlock for
       // Home, so the Unlock screen that comes back must still be able to say why.
@@ -1186,6 +1200,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     abortInitSession()
     // Before anything awaits: a reload finishing while the worker is cleared must not draw this wallet.
     walletGeneration.current++
+    clearUsdcSession()
     if (!svcWallet) throw new Error('Service worker not initialized')
     if (statusPingInterval.current) clearInterval(statusPingInterval.current)
     statusPingInterval.current = undefined
@@ -1227,6 +1242,10 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     walletWiped.current = true
     loadCompleted.current = false
     setLastHomeShown(false)
+    // Satora keeps USD swap secrets in its own IndexedDB: emptied through the client's own
+    // handles while it is still alive, then dropped. Never fatal, like the swap records below.
+    await wipeSatoraData()
+    clearUsdcSession()
     // clearStorage() wipes every key, so contacts and recents go with it.
     await clearStorage()
     // swap records outlive localStorage now: without this a reset leaves the

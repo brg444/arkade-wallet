@@ -9,6 +9,8 @@ import { SETTINGS_OPTION_KEY } from '../../providers/language'
 // translation, not an English fallback.
 const keepEnglishTermAllowList = new Set([
   'accounts.arknote',
+  'usdc.railArbitrum',
+  'usdc.railArkade',
   'accounts.solver',
   'accounts.total',
   'apps.dfx',

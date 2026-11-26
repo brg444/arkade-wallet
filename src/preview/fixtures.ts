@@ -83,7 +83,68 @@ const longHistory = (count: number) =>
     historyKey: `history-${i}`,
   }))
 
+// `?state=usd`: the USD account (lib/usdc), holding USDC beside the Arkade USDT it folds in.
+const USD_ADDRESS = '0x9858EfFD232B4033E47d90003D41EC34EcaEda94'
+const usdcFixture = (enabled: boolean) => {
+  const now = Date.now()
+  return {
+    available: enabled,
+    session: enabled ? { address: USD_ADDRESS, privateKey: new Uint8Array(32), rootXprv: '' } : undefined,
+    address: enabled ? USD_ADDRESS : undefined,
+    balance: enabled ? BigInt(125_400_000) : undefined,
+    transfers: enabled
+      ? [
+          {
+            hash: '0x01',
+            from: '0x1111111111111111111111111111111111111111',
+            to: USD_ADDRESS.toLowerCase(),
+            amount: BigInt(50_000_000),
+            timestamp: now - 26 * 3_600_000,
+            direction: 'in' as const,
+          },
+          {
+            hash: '0x02',
+            from: USD_ADDRESS.toLowerCase(),
+            to: '0x2222222222222222222222222222222222222222',
+            amount: BigInt(12_000_000),
+            timestamp: now - 50 * 3_600_000,
+            direction: 'out' as const,
+          },
+        ]
+      : [],
+    swaps: enabled
+      ? [
+          {
+            id: 'preview-swap-1',
+            direction: 'toUsdc' as const,
+            createdAt: now - 2 * 3_600_000,
+            updatedAt: now,
+            sourceAmount: '100000',
+            targetAmount: '87400000',
+            status: 'clientredeemed',
+            arkAddress: '',
+            funded: true,
+          },
+          {
+            id: 'preview-swap-2',
+            direction: 'toArkade' as const,
+            createdAt: now - 10 * 60_000,
+            updatedAt: now,
+            sourceAmount: '20000000',
+            targetAmount: '22600',
+            status: 'clientfunded',
+            arkAddress: '',
+            funded: true,
+          },
+        ]
+      : [],
+    refresh: () => Promise.resolve(),
+    recordSwap: () => {},
+  }
+}
+
 export function buildFixtures(theme: Themes, variant: string) {
+  const usd = variant === 'usd'
   const empty = variant === 'empty'
   const historyCount = Number(/^history-(\d+)$/.exec(variant)?.[1] ?? 0)
   const history = historyCount ? longHistory(historyCount) : txs
@@ -132,6 +193,7 @@ export function buildFixtures(theme: Themes, variant: string) {
       },
     },
     limits: mockLimitsContextValue,
+    usdc: usdcFixture(usd),
     swaps: {
       ...((SwapsContext as any)._currentValue ?? {}),
       swapAvailable: true,
