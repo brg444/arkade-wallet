@@ -41,7 +41,7 @@ export default function UsdcSend({ back }: { back: () => void }) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
 
-  const configured = Boolean(usdcConfig().zerodevRpcUrl)
+  const configured = Boolean(usdcConfig().bundlerUrl)
   const available = balance ?? BigInt(0)
   const amount = parseUsdc(amountText)
   const addressValid = isSendableRecipient(to)

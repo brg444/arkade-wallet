@@ -6,7 +6,7 @@ import SentIcon from '../../../icons/Sent'
 import { prettyBitcoinAmount, prettyDate } from '../../../lib/format'
 import { formatUsd } from '../../../lib/usdc/amount'
 import type { UsdcTransfer } from '../../../lib/usdc/chain'
-import { explorerTxUrl } from '../../../lib/usdc/config'
+import { CIRCLE_PAYMASTER_V07, explorerTxUrl } from '../../../lib/usdc/config'
 import { swapPhase, type UsdcSwapRecord } from '../../../lib/usdc/swaps'
 import { ConfigContext } from '../../../providers/config'
 import { useTranslation } from '../../../providers/language'
@@ -25,16 +25,30 @@ type Entry =
  */
 export const usdcActivityEntries = (transfers: UsdcTransfer[], swaps: UsdcSwapRecord[]): Entry[] => {
   const swapContracts = new Set(swaps.flatMap((swap) => swap.counterparties ?? []))
-  // One send is two USDC transfers in one transaction: the payment, and the
-  // gas the paymaster takes back. They are one thing to the person, so
-  // transfers sharing a transaction and a direction show as one row for the
-  // total that moved.
+  const paymaster = CIRCLE_PAYMASTER_V07.toLowerCase()
+  const nonSwap = transfers.filter(
+    (transfer) => !swapContracts.has(transfer.direction === 'in' ? transfer.from : transfer.to),
+  )
+  const outHashes = new Set(nonSwap.filter((transfer) => transfer.direction === 'out').map((transfer) => transfer.hash))
+  // One send moves USDC in up to three transfers in one transaction: the
+  // payment, the paymaster's gas prefund, and any unused-gas refund the
+  // paymaster returns in `postOp`. Combine them into one outgoing row showing
+  // the net amount spent.
   const byTx = new Map<string, UsdcTransfer>()
-  for (const transfer of transfers) {
-    if (swapContracts.has(transfer.direction === 'in' ? transfer.from : transfer.to)) continue
+  const paymasterRefunds = new Map<string, bigint>()
+  for (const transfer of nonSwap) {
+    if (transfer.direction === 'in' && transfer.from === paymaster && outHashes.has(transfer.hash)) {
+      paymasterRefunds.set(transfer.hash, (paymasterRefunds.get(transfer.hash) ?? BigInt(0)) + transfer.amount)
+      continue
+    }
     const key = `${transfer.hash}-${transfer.direction}`
     const seen = byTx.get(key)
     byTx.set(key, seen ? { ...seen, amount: seen.amount + transfer.amount } : transfer)
+  }
+  for (const [hash, refund] of paymasterRefunds) {
+    const key = `${hash}-out`
+    const out = byTx.get(key)
+    if (out) byTx.set(key, { ...out, amount: out.amount > refund ? out.amount - refund : BigInt(0) })
   }
   const entries: Entry[] = [
     ...[...byTx.values()].map((transfer) => ({ kind: 'transfer' as const, at: transfer.timestamp, transfer })),

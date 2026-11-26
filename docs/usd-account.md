@@ -22,9 +22,10 @@ network) and in the USD account breakdown when dollars sit on both Arkade and Ar
   the wallet claims on Arkade. `UsdcProvider` resumes every unfinished swap across reloads, claiming once
   Satora has locked its side and refunding when a swap can no longer complete.
 - **Sends.** The account's own address is upgraded in place with EIP-7702 to Kernel V3.3 (the one
-  delegation Satora also signs for), and each send is one UserOperation through ZeroDev's ERC-20 paymaster
-  that approves at most 1 USDC for gas and makes the transfer. Gas is paid in USDC, so there is never any
-  ETH to hold (`src/lib/usdc/send.ts`).
+  delegation Satora also signs for), and each send is one EntryPoint v0.7 UserOperation paid through
+  Circle's permissionless USDC Paymaster v0.7 (`0x6C973eBe80dCD8660841D4356bf15c32460271C9`) via an
+  EIP-2612 permit bounded to 1 USDC. Circle fronts the ETH gas and refunds any unused USDC in `postOp`,
+  so there is never any ETH to hold and no paid paymaster API key is required (`src/lib/usdc/send.ts`).
 - **One USD.** A USD-designated asset on Arkade folds into the same account: Home shows one USD row with
   the combined balance, and the account screen breaks it down by where it sits (Arkade, Arbitrum). The
   Arkade share opens its own account screen, where it sends, receives and swaps natively.
@@ -75,14 +76,15 @@ The Satora and ZeroDev code paths load in their own chunk, only when the USD scr
 
 All runtime, through the Docker entrypoint like the other `VITE_*` variables.
 
-| Variable                    | Purpose                                                                      |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| `VITE_USDC_ENABLED`         | `true` turns the account on. Mainnet only, whatever this says.               |
-| `VITE_ZERODEV_PROJECT_ID`   | ZeroDev project for the bundler and ERC-20 paymaster. Sends need it.         |
-| `VITE_ARBITRUM_RPC_URL`     | Arbitrum One JSON-RPC. Defaults to `https://arb1.arbitrum.io/rpc`.           |
-| `VITE_SATORA_API_URL`       | Overrides Satora's API base URL. Defaults to the SDK's.                      |
-| `VITE_USDC_HISTORY_URL`     | Optional Blockscout v2 API base. When unset, reads `Transfer` logs from RPC. |
-| `VITE_USDC_HISTORY_API_KEY` | Bearer key for that indexer, if it asks for one.                             |
+| Variable                    | Purpose                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `VITE_USDC_ENABLED`         | `true` turns the account on. Mainnet only, whatever this says.                        |
+| `VITE_ARBITRUM_RPC_URL`     | Arbitrum One JSON-RPC. Defaults to `https://arb1.arbitrum.io/rpc`.                    |
+| `VITE_ARBITRUM_BUNDLER_URL` | ERC-4337 bundler RPC for sends. Defaults to `https://public.pimlico.io/v2/42161/rpc`. |
+| `VITE_ZERODEV_PROJECT_ID`   | Optional ZeroDev v3 project id used as bundler fallback if bundler URL is unset.      |
+| `VITE_SATORA_API_URL`       | Overrides Satora's API base URL. Defaults to the SDK's.                               |
+| `VITE_USDC_HISTORY_URL`     | Optional Blockscout v2 API base. When unset, reads `Transfer` logs from RPC.          |
+| `VITE_USDC_HISTORY_API_KEY` | Bearer key for that indexer, if it asks for one.                                      |
 
 The CSP sets no `connect-src`, so none of these origins needs a header change.
 

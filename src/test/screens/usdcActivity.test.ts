@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { UsdcTransfer } from '../../lib/usdc/chain'
+import { CIRCLE_PAYMASTER_V07 } from '../../lib/usdc/config'
 import { usdcActivityEntries } from '../../screens/Wallet/Usdc/Activity'
 
 const transfer = (overrides: Partial<UsdcTransfer>): UsdcTransfer => ({
@@ -25,6 +26,24 @@ describe('USD activity', () => {
     expect(entries).toHaveLength(2)
     const sent = entries.find((entry) => entry.kind === 'transfer' && entry.transfer.hash === '0xaa')
     expect(sent?.kind === 'transfer' && sent.transfer.amount).toBe(BigInt(20_012_000))
+  })
+
+  it('nets a Circle Paymaster postOp refund back into the outgoing send row', () => {
+    const pm = CIRCLE_PAYMASTER_V07.toLowerCase()
+    const entries = usdcActivityEntries(
+      [
+        // refund can arrive before or after outgoing legs in log order
+        transfer({ hash: '0xcc', direction: 'in', from: pm, to: '0xself', amount: BigInt(15_000) }),
+        transfer({ hash: '0xcc', direction: 'out', to: pm, amount: BigInt(35_000) }),
+        transfer({ hash: '0xcc', direction: 'out', to: '0xpayee', amount: BigInt(10_000_000) }),
+      ],
+      [],
+    )
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'transfer',
+      transfer: { hash: '0xcc', direction: 'out', amount: BigInt(10_020_000) },
+    })
   })
 
   it('leaves a swap leg to its swap row', () => {

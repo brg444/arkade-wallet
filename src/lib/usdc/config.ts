@@ -16,18 +16,24 @@ export const USDC_DECIMALS = 6
  */
 export const USD_ACCOUNT_ID = 'usd'
 
-/** Kernel V3.3, the EIP-7702 delegate ZeroDev installs and Satora signs for. */
+/** Kernel V3.3, the EIP-7702 delegate used for sends and supported by Satora. */
 export const KERNEL_V3_3_DELEGATE = '0xd6CEDDe84be40893d153Be9d467CD6aD37875b28'
 
-/** Upper bound on what one send lets the ERC-20 paymaster pull for gas. */
+/** Permissionless Circle Paymaster v0.7 on Arbitrum One (gas paid in USDC via EIP-2612 permit). */
+export const CIRCLE_PAYMASTER_V07 = '0x6C973eBe80dCD8660841D4356bf15c32460271C9'
+
+/** Upper bound on what one send permits the paymaster to pull for gas. */
 export const PAYMASTER_ALLOWANCE = BigInt(1_000_000) // 1 USDC
 
 const DEFAULT_ARBITRUM_RPC_URL = 'https://arb1.arbitrum.io/rpc'
+const DEFAULT_ARBITRUM_BUNDLER_URL = 'https://public.pimlico.io/v2/42161/rpc'
 const DEFAULT_EXPLORER_URL = 'https://arbiscan.io'
 
 export interface UsdcConfig {
   rpcUrl: string
-  /** ZeroDev v3 project RPC: bundler and paymaster share it. */
+  /** ERC-4337 bundler RPC for Arbitrum One sends (defaults to Pimlico's public Arbitrum bundler). */
+  bundlerUrl: string
+  /** Optional ZeroDev v3 project RPC (also used as bundler fallback if `VITE_ARBITRUM_BUNDLER_URL` is unset). */
   zerodevRpcUrl?: string
   satoraApiUrl?: string
   /** Optional Blockscout v2 compatible indexer; when unset, transfers read from the RPC. */
@@ -38,9 +44,12 @@ export interface UsdcConfig {
 
 export const usdcConfig = (): UsdcConfig => {
   const projectId = fromRuntimeEnv(import.meta.env.VITE_ZERODEV_PROJECT_ID)
+  const zerodevRpcUrl = projectId ? `https://rpc.zerodev.app/api/v3/${projectId}/chain/${ARBITRUM_CHAIN_ID}` : undefined
   return {
     rpcUrl: fromRuntimeEnv(import.meta.env.VITE_ARBITRUM_RPC_URL) ?? DEFAULT_ARBITRUM_RPC_URL,
-    zerodevRpcUrl: projectId ? `https://rpc.zerodev.app/api/v3/${projectId}/chain/${ARBITRUM_CHAIN_ID}` : undefined,
+    bundlerUrl:
+      fromRuntimeEnv(import.meta.env.VITE_ARBITRUM_BUNDLER_URL) ?? zerodevRpcUrl ?? DEFAULT_ARBITRUM_BUNDLER_URL,
+    zerodevRpcUrl,
     satoraApiUrl: fromRuntimeEnv(import.meta.env.VITE_SATORA_API_URL),
     historyUrl: fromRuntimeEnv(import.meta.env.VITE_USDC_HISTORY_URL),
     historyApiKey: fromRuntimeEnv(import.meta.env.VITE_USDC_HISTORY_API_KEY),

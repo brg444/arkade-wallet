@@ -40,7 +40,6 @@ describe('UsdcSend', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
-    vi.stubEnv('VITE_ZERODEV_PROJECT_ID', 'test-project')
     mocks.estimateUsdcSendFee.mockResolvedValue(BigInt(10_000))
   })
 
