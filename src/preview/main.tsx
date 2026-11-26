@@ -80,6 +80,7 @@ function Harness() {
     setRecvInfo: (v: any) => setFlow((f: any) => ({ ...f, recvInfo: typeof v === 'function' ? v(f.recvInfo) : v })),
     setTxInfo: (v: any) => setFlow((f: any) => ({ ...f, txInfo: v })),
     setAssetInfo: (v: any) => setFlow((f: any) => ({ ...f, assetInfo: v })),
+    setUsdcEntry: (v: any) => setFlow((f: any) => ({ ...f, usdcEntry: v })),
   }
   const configValue = {
     ...fixtures.config,

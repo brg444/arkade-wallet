@@ -2179,8 +2179,8 @@ html.palette-dark .send-asset-menu {
 
 .swap-figure {
   display: flex;
-  min-height: 11rem;
-  flex: 1;
+  /* floor at its own content; it grows to fill whatever the pair and keypad leave */
+  flex: 1 0 auto;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -2423,7 +2423,8 @@ html.palette-dark .send-asset-menu {
   }
 }
 
-@media (max-height: 700px) {
+/* iPhones in Safari land between 700 and 740: the full-size keypad leaves no room there */
+@media (max-height: 740px) {
   .swap-composer {
     gap: 0.5rem;
   }
@@ -3436,7 +3437,8 @@ html.palette-dark .settings-row--danger .settings-row__chevron {
 
 .swap-flow-stage--compose .swap-composer {
   flex: 1;
-  min-height: 0;
+  /* never shorter than the figure and pair it holds, or the pair slides under the keypad */
+  min-height: min-content;
 }
 
 @media (max-height: 700px) {

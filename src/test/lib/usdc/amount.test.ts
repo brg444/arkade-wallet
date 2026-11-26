@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatUsd, formatUsdc, parseUsdc, usdcToNumber } from '../../../lib/usdc/amount'
+import { formatUsd, formatUsdBalance, formatUsdc, parseUsdc, usdcToNumber } from '../../../lib/usdc/amount'
 
 describe('USD account amounts', () => {
   it('parses typed amounts into base units', () => {
@@ -23,6 +23,9 @@ describe('USD account amounts', () => {
     expect(formatUsdc(BigInt(1))).toBe('0.000001')
     expect(formatUsdc(BigInt(1_234_000_000))).toBe('1,234.00')
     expect(formatUsd(BigInt(12_500_000))).toBe('12.50 USD')
+    // a balance shows whole cents, never rounded up past what is there
+    expect(formatUsdBalance(BigInt(10_249_530))).toBe('10.24 USD')
+    expect(formatUsdBalance(BigInt(999))).toBe('0.00 USD')
     expect(usdcToNumber(BigInt(2_500_000))).toBe(2.5)
   })
 })

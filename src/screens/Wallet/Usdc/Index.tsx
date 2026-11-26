@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import Content from '../../../components/Content'
 import Figure from '../../../components/Figure'
 import Header from '../../../components/Header'
@@ -11,7 +11,7 @@ import { ConfigContext } from '../../../providers/config'
 import { FiatContext } from '../../../providers/fiat'
 import Glyph from '../../../icons/Glyph'
 import { hapticLight } from '../../../lib/haptics'
-import { formatUsd } from '../../../lib/usdc/amount'
+import { formatUsdBalance } from '../../../lib/usdc/amount'
 import { Currencies } from '../../../lib/types'
 import { NavigationContext, Pages, holdBackLayer } from '../../../providers/navigation'
 import { FlowContext } from '../../../providers/flow'
@@ -29,18 +29,25 @@ export default function Usdc() {
   const { session, balance, refresh } = useContext(UsdcContext)
   const { config } = useContext(ConfigContext)
   const { fiatDecimals } = useContext(FiatContext)
-  const { setAssetInfo, setSwapFromAssetId } = useContext(FlowContext)
-  const { navigate } = useContext(NavigationContext)
+  const { setAssetInfo, setSwapFromAssetId, usdcEntry, setUsdcEntry } = useContext(FlowContext)
+  const { navigate, goBack } = useContext(NavigationContext)
   const { rows } = usePortfolioFiat()
   // the merged row: every dollar the person holds, on whichever rail
   const row = rows.find((candidate) => candidate.assetId === USD_ACCOUNT_ID)
   const { t } = useTranslation()
-  const [view, setView] = useState<UsdcView>('overview')
+  // Receive from Home lands straight on the address, and Back returns Home
+  const entry = useRef(usdcEntry).current
+  const [view, setView] = useState<UsdcView>(entry ?? 'overview')
 
-  const back = () => setView('overview')
+  useEffect(() => {
+    if (usdcEntry) setUsdcEntry(undefined)
+  }, [usdcEntry, setUsdcEntry])
+
+  const back = () => (entry && view === entry ? goBack() : setView('overview'))
 
   // the hardware back button closes a sub-view before it leaves the account
-  useEffect(() => (view === 'overview' ? undefined : holdBackLayer(back)), [view])
+  // (opened straight on a sub-view, the page's own back already returns Home)
+  useEffect(() => (view === 'overview' || view === entry ? undefined : holdBackLayer(back)), [view])
 
   useEffect(() => {
     refresh()
@@ -66,7 +73,7 @@ export default function Usdc() {
   // from their own screen, one tap away in the breakdown
   const units = balance ?? BigInt(0)
   const total = typeof row?.balance === 'bigint' ? row.balance : units
-  const formattedBalance = formatUsd(total)
+  const formattedBalance = formatUsdBalance(total)
   const decimals = fiatDecimals()
   const fiatText = (amount: number) =>
     prettyFiatAmount(amount, config.currency, {
@@ -104,6 +111,12 @@ export default function Usdc() {
                     <Figure value={formattedBalance} />
                   </PrivacyAmount>
                 </div>
+                {/* the balance is already in dollars: a value is only news in another currency */}
+                {value !== undefined && config.currency !== Currencies.USD ? (
+                  <span className='text-[length:var(--asset-detail-control-size)] text-[var(--ink-3)] tabular-nums'>
+                    <PrivacyAmount masked='••••'>{value}</PrivacyAmount>
+                  </span>
+                ) : null}
               </div>
             </section>
 
@@ -128,27 +141,6 @@ export default function Usdc() {
                 {t('wallet.swap')}
               </button>
             </div>
-
-            <section className='asset-detail-holdings'>
-              <div className='asset-detail-holding'>
-                <span>{t('common.balance')}</span>
-                <strong>
-                  <PrivacyAmount masked='•••• USD'>
-                    <span className='asset-detail-holding-amount'>{formattedBalance}</span>
-                  </PrivacyAmount>
-                </strong>
-              </div>
-              <div className='asset-detail-holding'>
-                <span>{t('common.value')}</span>
-                <strong>
-                  {value === undefined ? (
-                    t('accounts.valueUnavailable')
-                  ) : (
-                    <PrivacyAmount masked='••••'>{value}</PrivacyAmount>
-                  )}
-                </strong>
-              </div>
-            </section>
 
             {sources.length > 1 ? <UsdBreakdown sources={sources} total={total} onOpen={openSource} /> : null}
 
@@ -218,7 +210,7 @@ function UsdBreakdown({
               </div>
               <div className='activity-row__right'>
                 <span className='activity-row__amount'>
-                  <PrivacyAmount masked='•••• USD'>{formatUsd(source.balance)}</PrivacyAmount>
+                  <PrivacyAmount masked='•••• USD'>{formatUsdBalance(source.balance)}</PrivacyAmount>
                 </span>
               </div>
             </>

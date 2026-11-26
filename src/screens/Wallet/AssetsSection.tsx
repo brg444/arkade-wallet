@@ -15,6 +15,18 @@ import { useTranslation } from '../../providers/language'
 import { UsdcContext } from '../../providers/usdc'
 import { USD_ACCOUNT_ID } from '../../lib/usdc/config'
 
+/** The accounts Home lists, in its order: also what Receive from Home offers. */
+export function useHomeAccountRows(): PortfolioRow[] {
+  const { isVerifiedAsset } = useContext(WalletContext)
+  const { rows } = usePortfolioFiat()
+  // unverified assets are spoofable, so they never show on home at all —
+  // they stay manageable in the Arkade Mint app
+  return rows.filter(
+    (row) =>
+      !row.mergedInto && (row.assetId === 'btc' || row.assetId === USD_ACCOUNT_ID || isVerifiedAsset(row.assetId)),
+  )
+}
+
 export default function AssetsSection() {
   const { swapAvailable } = useContext(SwapsContext)
   const [swapSheetOpen, setSwapSheetOpen] = useState(false)
@@ -22,17 +34,9 @@ export default function AssetsSection() {
   const { fiatDecimals } = useContext(FiatContext)
   const { setAssetInfo } = useContext(FlowContext)
   const { navigate } = useContext(NavigationContext)
-  const { isVerifiedAsset } = useContext(WalletContext)
   const { t } = useTranslation()
   const usdc = useContext(UsdcContext)
-
-  const { rows } = usePortfolioFiat()
-  // unverified assets are spoofable, so they never show on home at all —
-  // they stay manageable in the Arkade Mint app
-  const accountRows = rows.filter(
-    (row) =>
-      !row.mergedInto && (row.assetId === 'btc' || row.assetId === USD_ACCOUNT_ID || isVerifiedAsset(row.assetId)),
-  )
+  const accountRows = useHomeAccountRows()
 
   const fiatLabel = (amount: number) => {
     const decimals = fiatDecimals()
