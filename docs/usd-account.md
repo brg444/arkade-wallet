@@ -26,6 +26,10 @@ network) and in the USD account breakdown when dollars sit on both Arkade and Ar
   Circle's permissionless USDC Paymaster v0.7 (`0x6C973eBe80dCD8660841D4356bf15c32460271C9`) via an
   EIP-2612 permit bounded to 1 USDC. Circle fronts the ETH gas and refunds any unused USDC in `postOp`,
   so there is never any ETH to hold and no paid paymaster API key is required (`src/lib/usdc/send.ts`).
+  Sends to Arbitrum use a direct `USDC.transfer`. Sends to Ethereum, Base, Optimism, Polygon, or
+  Avalanche batch `USDC.approve` + Circle CCTP V2 `TokenMessengerV2.depositForBurnWithHook` with
+  Circle's Forwarding Service (`cctp-forward`, fast finality), so Circle automatically mints native
+  USDC on the destination chain with no native gas required on either network (`src/lib/usdc/cctp.ts`).
 - **One USD.** A USD-designated asset on Arkade folds into the same account: Home shows one USD row with
   the combined balance, and the account screen breaks it down by where it sits (Arkade, Arbitrum). The
   Arkade share opens its own account screen, where it sends, receives and swaps natively.
@@ -64,11 +68,12 @@ The Satora and ZeroDev code paths load in their own chunk, only when the USD scr
   is adopted without overwriting existing records. A swap created on moved terms is deleted from Satora's
   store, since it was never funded.
 - **Sends.** Scanned codes are parsed as EIP-681: the payee comes from the `address` parameter of a USDC
-  payment request, never the token contract, and a code naming another chain or token is refused. The
-  USDC contract and the zero address are never accepted as recipients. A send is only offered once its
-  fee is quoted, fits the balance and fits the 1 USDC paymaster approval. If confirmation fails or times
-  out after the bundler has accepted the UserOperation, Send closes and points at USD activity instead of
-  offering a second Send tap.
+  payment request on any supported network (never the token contract), and a code naming an unsupported
+  chain or a non-USDC token is refused. Known USDC contracts, Circle's `TokenMessengerV2`, and the zero
+  address are never accepted as recipients. A send is only offered once its fee is quoted, fits the
+  balance, and its Arbitrum paymaster gas fits the 1 USDC paymaster approval. If confirmation fails or
+  times out after the bundler has accepted the UserOperation, Send closes and points at USD activity
+  instead of offering a second Send tap.
 - **One driver.** One tab drives swaps and reconcile at a time (`navigator.locks`); the others follow
   through storage.
 

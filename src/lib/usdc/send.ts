@@ -29,6 +29,17 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum } from 'viem/chains'
 import {
+  CCTP_FINALITY_FAST,
+  CCTP_FORWARDING_HOOK_DATA,
+  CCTP_TOKEN_MESSENGER_V2,
+  CCTP_ZERO_BYTES32,
+  evmAddressToBytes32,
+  isCrossChainNetwork,
+  quoteCctpBridgeFee,
+  usdcSendNetwork,
+  type UsdcSendNetworkId,
+} from './cctp'
+import {
   ARBITRUM_CHAIN_ID,
   CIRCLE_PAYMASTER_V07,
   KERNEL_V3_3_DELEGATE,
@@ -69,6 +80,9 @@ const CHAINLINK_ORACLE_ABI = parseAbi([
   'function decimals() view returns (uint8)',
 ])
 const USDC_NONCES_ABI = parseAbi(['function nonces(address owner) view returns (uint256)'])
+const TOKEN_MESSENGER_V2_ABI = parseAbi([
+  'function depositForBurnWithHook(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold, bytes hookData) external',
+])
 
 const PERMIT_TYPES = {
   Permit: [
@@ -243,24 +257,84 @@ const buildClients = async (session: UsdcSession) => {
   return { account, kernelClient, publicClient }
 }
 
-const transferCalls = (to: string, amount: bigint) => [
-  {
-    to: USDC_ARBITRUM_ADDRESS as `0x${string}`,
-    value: BigInt(0),
-    data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [getAddress(to), amount] }),
-  },
-]
+const buildSendCalls = (to: string, amount: bigint, network: UsdcSendNetworkId, bridgeFee: bigint) => {
+  if (!isCrossChainNetwork(network)) {
+    return [
+      {
+        to: USDC_ARBITRUM_ADDRESS as `0x${string}`,
+        value: BigInt(0),
+        data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [getAddress(to), amount] }),
+      },
+    ]
+  }
+  // Cross-chain sends via Circle CCTP V2 + Forwarding Service: Circle deducts
+  // the actual fast-transfer + forwarding fee (<= `bridgeFee`) from the burned
+  // amount on destination mint, so burning `amount + bridgeFee` guarantees the
+  // recipient receives at least `amount` with zero gas needed on destination.
+  const dest = usdcSendNetwork(network)
+  const burnAmount = amount + bridgeFee
+  return [
+    {
+      to: USDC_ARBITRUM_ADDRESS as `0x${string}`,
+      value: BigInt(0),
+      data: encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [CCTP_TOKEN_MESSENGER_V2 as `0x${string}`, burnAmount],
+      }),
+    },
+    {
+      to: CCTP_TOKEN_MESSENGER_V2 as `0x${string}`,
+      value: BigInt(0),
+      data: encodeFunctionData({
+        abi: TOKEN_MESSENGER_V2_ABI,
+        functionName: 'depositForBurnWithHook',
+        args: [
+          burnAmount,
+          dest.cctpDomain,
+          evmAddressToBytes32(getAddress(to)),
+          USDC_ARBITRUM_ADDRESS as `0x${string}`,
+          CCTP_ZERO_BYTES32 as `0x${string}`,
+          bridgeFee,
+          CCTP_FINALITY_FAST,
+          CCTP_FORWARDING_HOOK_DATA as `0x${string}`,
+        ],
+      }),
+    },
+  ]
+}
+
+export interface UsdcSendFeeQuote {
+  /** Maximum USDC base units Circle Paymaster v0.7 may pull for Arbitrum gas. */
+  gasFee: bigint
+  /** Maximum USDC base units Circle CCTP V2 + Forwarding Service may take (0 on Arbitrum). */
+  bridgeFee: bigint
+  /** Combined maximum fee (`gasFee + bridgeFee`). */
+  totalFee: bigint
+  /** Present on cross-chain sends: whether `bridgeFee` came from live Circle IRIS or baseline fallback. */
+  bridgeFeeSource?: 'iris' | 'fallback'
+}
 
 /**
- * What Circle Paymaster v0.7 will take for this send at most, in USDC base
- * units. Prepares the full UserOperation (authorization and permit included)
- * without sending it.
+ * Quotes the maximum USDC fee for this send. On Arbitrum that is Circle
+ * Paymaster v0.7 gas alone; on other supported networks it adds Circle CCTP V2
+ * fast-transfer + Forwarding Service delivery fees. Prepares the full
+ * UserOperation (authorization and permit included) without sending it.
  */
-export const estimateUsdcSendFee = async (session: UsdcSession, to: string, amount: bigint): Promise<bigint> => {
-  const { account, kernelClient, publicClient } = await buildClients(session)
+export const estimateUsdcSendFee = async (
+  session: UsdcSession,
+  to: string,
+  amount: bigint,
+  network: UsdcSendNetworkId = 'arbitrum',
+): Promise<UsdcSendFeeQuote> => {
+  const [{ account, kernelClient, publicClient }, bridgeQuote] = await Promise.all([
+    buildClients(session),
+    quoteCctpBridgeFee(network, amount),
+  ])
+  const calls = buildSendCalls(to, amount, network, bridgeQuote.maxFee)
   const [userOperation, additionalGasCharge, oracleAddress] = await Promise.all([
     kernelClient.prepareUserOperation({
-      callData: await account.encodeCalls(transferCalls(to, amount)),
+      callData: await account.encodeCalls(calls),
     }),
     publicClient.readContract({
       address: CIRCLE_PAYMASTER_V07 as `0x${string}`,
@@ -285,7 +359,7 @@ export const estimateUsdcSendFee = async (session: UsdcSession, to: string, amou
       functionName: 'decimals',
     }),
   ])
-  return computeCirclePaymasterMaxFee({
+  const gasFee = computeCirclePaymasterMaxFee({
     preVerificationGas: userOperation.preVerificationGas ?? BigInt(0),
     verificationGasLimit: userOperation.verificationGasLimit ?? BigInt(0),
     callGasLimit: userOperation.callGasLimit ?? BigInt(0),
@@ -296,19 +370,44 @@ export const estimateUsdcSendFee = async (session: UsdcSession, to: string, amou
     ethUsdPrice: roundData[1],
     oracleDecimals: Number(oracleDecimals),
   })
+  return {
+    gasFee,
+    bridgeFee: bridgeQuote.maxFee,
+    totalFee: gasFee + bridgeQuote.maxFee,
+    ...(isCrossChainNetwork(network) ? { bridgeFeeSource: bridgeQuote.source } : {}),
+  }
+}
+
+export interface UsdcSendOptions {
+  network?: UsdcSendNetworkId
+  /** Explicit CCTP V2 `maxFee` ceiling from the shown quote (used as-is on cross-chain sends). */
+  bridgeFee?: bigint
 }
 
 export interface UsdcSendResult {
   userOpHash: string
   txHash: string
+  network: UsdcSendNetworkId
+  bridgeFee: bigint
 }
 
-export const sendUsdc = async (session: UsdcSession, to: string, amount: bigint): Promise<UsdcSendResult> => {
+export const sendUsdc = async (
+  session: UsdcSession,
+  to: string,
+  amount: bigint,
+  options?: UsdcSendOptions,
+): Promise<UsdcSendResult> => {
   if (amount <= BigInt(0)) throw new Error('Amount must be positive')
   if (!isSendableRecipient(to)) throw new Error('Not an address USDC can be sent to')
+  const network = options?.network ?? 'arbitrum'
+  const bridgeFee = isCrossChainNetwork(network)
+    ? options?.bridgeFee !== undefined && options.bridgeFee > BigInt(0)
+      ? options.bridgeFee
+      : (await quoteCctpBridgeFee(network, amount)).maxFee
+    : BigInt(0)
   const { account, kernelClient } = await buildClients(session)
   const userOpHash = await kernelClient.sendUserOperation({
-    callData: await account.encodeCalls(transferCalls(to, amount)),
+    callData: await account.encodeCalls(buildSendCalls(to, amount, network, bridgeFee)),
   })
   let receipt: Awaited<ReturnType<typeof kernelClient.waitForUserOperationReceipt>>
   try {
@@ -317,5 +416,5 @@ export const sendUsdc = async (session: UsdcSession, to: string, amount: bigint)
     throw new UsdcSendUncertain(userOpHash, err)
   }
   if (!receipt.success) throw new Error('The transfer was included but reverted')
-  return { userOpHash, txHash: receipt.receipt.transactionHash }
+  return { userOpHash, txHash: receipt.receipt.transactionHash, network, bridgeFee }
 }

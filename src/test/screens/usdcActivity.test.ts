@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { UsdcTransfer } from '../../lib/usdc/chain'
+import { CCTP_TOKEN_MESSENGER_V2 } from '../../lib/usdc/cctp'
 import { CIRCLE_PAYMASTER_V07 } from '../../lib/usdc/config'
 import { usdcActivityEntries } from '../../screens/Wallet/Usdc/Activity'
 
@@ -43,6 +44,24 @@ describe('USD activity', () => {
     expect(entries[0]).toMatchObject({
       kind: 'transfer',
       transfer: { hash: '0xcc', direction: 'out', amount: BigInt(10_020_000) },
+    })
+  })
+
+  it('collapses a CCTP V2 cross-chain burn and Circle Paymaster prefund/refund into one outgoing row', () => {
+    const pm = CIRCLE_PAYMASTER_V07.toLowerCase()
+    const messenger = CCTP_TOKEN_MESSENGER_V2.toLowerCase()
+    const entries = usdcActivityEntries(
+      [
+        transfer({ hash: '0xdd', direction: 'out', to: messenger, amount: BigInt(10_250_000) }),
+        transfer({ hash: '0xdd', direction: 'out', to: pm, amount: BigInt(45_000) }),
+        transfer({ hash: '0xdd', direction: 'in', from: pm, to: '0xself', amount: BigInt(15_000) }),
+      ],
+      [],
+    )
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'transfer',
+      transfer: { hash: '0xdd', direction: 'out', amount: BigInt(10_280_000) },
     })
   })
 

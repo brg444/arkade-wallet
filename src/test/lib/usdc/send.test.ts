@@ -1,7 +1,20 @@
+import { decodeFunctionData, erc20Abi, parseAbi } from 'viem'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  CCTP_FINALITY_FAST,
+  CCTP_FORWARDING_HOOK_DATA,
+  CCTP_TOKEN_MESSENGER_V2,
+  CCTP_ZERO_BYTES32,
+  clearCctpFeeCache,
+  evmAddressToBytes32,
+} from '../../../lib/usdc/cctp'
 import { UsdcSendUncertain, computeCirclePaymasterMaxFee, estimateUsdcSendFee, sendUsdc } from '../../../lib/usdc/send'
 import { CIRCLE_PAYMASTER_V07, PAYMASTER_ALLOWANCE, USDC_ARBITRUM_ADDRESS } from '../../../lib/usdc/config'
 import type { UsdcSession } from '../../../lib/usdc/keys'
+
+const TOKEN_MESSENGER_ABI = parseAbi([
+  'function depositForBurnWithHook(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold, bytes hookData) external',
+])
 
 const mocks = vi.hoisted(() => ({
   prepareUserOperation: vi.fn(),
@@ -67,12 +80,14 @@ const recipient = '0x1111111111111111111111111111111111111111'
 describe('USDC gasless sends (Circle Paymaster v0.7)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    clearCctpFeeCache()
     mocks.encodeCalls.mockResolvedValue('0xdead')
     mocks.signTypedData.mockResolvedValue(`0x00${'ab'.repeat(65)}`)
   })
 
   afterEach(() => {
     vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
   })
 
   it('computes max USDC gas fee with Circle 10% surcharge rounded up', () => {
@@ -109,8 +124,8 @@ describe('USDC gasless sends (Circle Paymaster v0.7)', () => {
       throw new Error(`unexpected readContract: ${functionName}`)
     })
 
-    const fee = await estimateUsdcSendFee(session, recipient, BigInt(1_000_000))
-    expect(fee).toBe(BigInt(42_636))
+    const quote = await estimateUsdcSendFee(session, recipient, BigInt(1_000_000))
+    expect(quote).toEqual({ gasFee: BigInt(42_636), bridgeFee: BigInt(0), totalFee: BigInt(42_636) })
 
     // Verify paymaster callback packs Circle Paymaster v0.7 permit with live nonce, 66-byte ERC-1271 sig,
     // postOp floor above `additionalGasCharge` (35k), and leaves verification gas to bundler estimation
@@ -129,6 +144,79 @@ describe('USDC gasless sends (Circle Paymaster v0.7)', () => {
         }),
       }),
     )
+  })
+
+  it('batches USDC approve + TokenMessengerV2 depositForBurnWithHook for cross-chain CCTP V2 sends', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify([
+              { finalityThreshold: 1000, minimumFee: 1, forwardFee: { low: 150_000, med: 180_000, high: 200_000 } },
+            ]),
+            { status: 200 },
+          ),
+      ),
+    )
+    mocks.prepareUserOperation.mockResolvedValue({
+      preVerificationGas: BigInt(80_000),
+      verificationGasLimit: BigInt(60_000),
+      callGasLimit: BigInt(250_000),
+      paymasterVerificationGasLimit: BigInt(420_000),
+      paymasterPostOpGasLimit: BigInt(50_000),
+      maxFeePerGas: BigInt(30_000_000),
+    })
+    mocks.readContract.mockImplementation(async ({ functionName }: { functionName: string }) => {
+      if (functionName === 'additionalGasCharge') return BigInt(35_000)
+      if (functionName === 'oracle') return '0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612'
+      if (functionName === 'latestRoundData')
+        return [BigInt(1), BigInt(200_000_000_000), BigInt(0), BigInt(0), BigInt(1)]
+      if (functionName === 'decimals') return 8
+      throw new Error(`unexpected readContract: ${functionName}`)
+    })
+
+    const amount = BigInt(10_000_000)
+    const quote = await estimateUsdcSendFee(session, recipient, amount, 'base')
+    expect(quote.bridgeFee).toBe(BigInt(201_275))
+    expect(quote.bridgeFeeSource).toBe('iris')
+    expect(quote.totalFee).toBe(quote.gasFee + quote.bridgeFee)
+
+    mocks.sendUserOperation.mockResolvedValue('0xop-cctp')
+    mocks.waitForUserOperationReceipt.mockResolvedValue({
+      success: true,
+      receipt: { transactionHash: '0xtx-cctp' },
+    })
+
+    const result = await sendUsdc(session, recipient, amount, { network: 'base', bridgeFee: quote.bridgeFee })
+    expect(result).toEqual({
+      userOpHash: '0xop-cctp',
+      txHash: '0xtx-cctp',
+      network: 'base',
+      bridgeFee: quote.bridgeFee,
+    })
+
+    const calls = mocks.encodeCalls.mock.calls.at(-1)?.[0] as { to: string; value: bigint; data: `0x${string}` }[]
+    expect(calls).toHaveLength(2)
+    expect(calls[0].to).toBe(USDC_ARBITRUM_ADDRESS)
+    expect(decodeFunctionData({ abi: erc20Abi, data: calls[0].data })).toEqual({
+      functionName: 'approve',
+      args: [CCTP_TOKEN_MESSENGER_V2, amount + quote.bridgeFee],
+    })
+    expect(calls[1].to).toBe(CCTP_TOKEN_MESSENGER_V2)
+    expect(decodeFunctionData({ abi: TOKEN_MESSENGER_ABI, data: calls[1].data })).toEqual({
+      functionName: 'depositForBurnWithHook',
+      args: [
+        amount + quote.bridgeFee,
+        6,
+        evmAddressToBytes32(recipient),
+        USDC_ARBITRUM_ADDRESS,
+        CCTP_ZERO_BYTES32,
+        quote.bridgeFee,
+        CCTP_FINALITY_FAST,
+        CCTP_FORWARDING_HOOK_DATA,
+      ],
+    })
   })
 
   it('throws UsdcSendUncertain when waiting for the receipt fails after the bundler accepted the UserOp', async () => {
