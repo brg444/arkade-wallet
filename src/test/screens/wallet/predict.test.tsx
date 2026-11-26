@@ -1,3 +1,4 @@
+import { toXOnlySignerHex } from '@arkade-os/sdk'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DesktopWalletShell from '../../../components/DesktopWalletShell'
@@ -7,7 +8,9 @@ import { NavigationContext, Pages } from '../../../providers/navigation'
 import { OptionsContext } from '../../../providers/options'
 import { WalletContext } from '../../../providers/wallet'
 import Predict from '../../../screens/Wallet/Predict/Index'
+import PositionsList from '../../../screens/Wallet/Predict/PositionsList'
 import PredictSection from '../../../screens/Wallet/PredictSection'
+import { writePredictPositions, type PredictPosition } from '../../../lib/predict/storage'
 import {
   mockAspContextValue,
   mockConfigContextValue,
@@ -199,5 +202,94 @@ describe('Predict screen & desktop navigation', () => {
     )
     const first = screen.getByTestId('home-predict-line').textContent
     await waitFor(() => expect(screen.getByTestId('home-predict-line').textContent).not.toBe(first), { timeout: 5_000 })
+  })
+
+  it('immediately refreshes a past-expiry filled position on mount instead of staying on Settling', async () => {
+    localStorage.setItem('arkade-predict-intro-v1', '1')
+    const pubkey = toXOnlySignerHex('02'.repeat(33).slice(0, 66))
+    const expiredPos: PredictPosition = {
+      id: 'past-filled-1',
+      network: 'bitcoin',
+      mode: 'demo',
+      kind: 2,
+      strikeCents: '6400000',
+      stakeSats: '25000',
+      payoutSats: '47500',
+      multiplier: 1.9,
+      expiry: openWindow - 600,
+      deadline: openWindow - 630,
+      exit: 605184,
+      voidAfter: 86400,
+      fallbackDelay: 605184,
+      finalExitDelay: 691200,
+      holderAddress: 'ark1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq',
+      holderPubkey: pubkey,
+      deskName: 'COINFLIP (Demo)',
+      deskPkHex: '0'.repeat(64),
+      backupPkHex: '1'.repeat(64),
+      oraclePkHex: '2'.repeat(64),
+      intentAddress: '',
+      vaultAddress: 'ark1vlt1234',
+      phase: 'filled',
+      refundable: false,
+      createdAt: openWindow - 900,
+    }
+    writePredictPositions('bitcoin', pubkey, [expiredPos])
+
+    renderPredict()
+    await waitFor(() => expect(screen.getByTestId('predict-spot-price')).toHaveTextContent('$65,000.00'))
+
+    fireEvent.click(screen.getByRole('button', { name: /Positions/ }))
+    await waitFor(() => expect(screen.getByTestId('predict-pos-past-filled-1')).toHaveTextContent('Won'))
+    expect(screen.queryByText('Settling')).not.toBeInTheDocument()
+  })
+
+  it('does not label a settled position without settleCents as not filled', () => {
+    const settledPos: PredictPosition = {
+      id: 'settled-no-price',
+      network: 'bitcoin',
+      mode: 'live',
+      kind: 2,
+      strikeCents: '6500000',
+      stakeSats: '25000',
+      payoutSats: '47500',
+      multiplier: 1.9,
+      expiry: openWindow - 600,
+      deadline: openWindow - 630,
+      exit: 605184,
+      voidAfter: 86400,
+      fallbackDelay: 605184,
+      finalExitDelay: 691200,
+      holderAddress: 'ark1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq',
+      holderPubkey: '02'.repeat(32),
+      deskName: 'COINFLIP',
+      deskPkHex: '0'.repeat(64),
+      backupPkHex: '1'.repeat(64),
+      oraclePkHex: '2'.repeat(64),
+      intentAddress: '',
+      vaultAddress: 'ark1vlt1234',
+      phase: 'settled',
+      refundable: false,
+      userPayoutSats: '47500',
+      deskPayoutSats: '0',
+      createdAt: openWindow - 900,
+    }
+
+    render(
+      <NavigationContext.Provider value={mockNavigationContextValue}>
+        <PositionsList
+          positions={[settledPos]}
+          priceCents={6_500_000}
+          nowSec={openWindow}
+          onBack={vi.fn()}
+          onSelect={vi.fn()}
+        />
+      </NavigationContext.Provider>,
+    )
+
+    const row = screen.getByTestId('predict-pos-settled-no-price')
+    expect(row).toHaveTextContent('Won')
+    expect(row).toHaveTextContent('25,000 in')
+    expect(row).not.toHaveTextContent('The desk didn’t fill it')
   })
 })

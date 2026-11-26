@@ -293,7 +293,7 @@ export function createLivePredictEngine(config: PredictConfig, svcWallet: IWalle
     },
 
     async refreshPosition(position) {
-      return refreshLivePosition(position, config.profile)
+      return refreshLivePosition(position, config.profile, config.oracleFixingUrl)
     },
 
     async cancelPosition(position) {

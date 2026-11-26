@@ -88,7 +88,17 @@ export function upsertPredictPosition(list: PredictPosition[], next: PredictPosi
   const merged: PredictPosition = {
     ...prev,
     ...next,
+    id: prev.id || next.id,
     phase: keepPrevPhase ? prev.phase : next.phase,
+    deadline: prev.intentAddress && prev.deadline ? prev.deadline : next.deadline || prev.deadline,
+    holderAddress: next.holderAddress || prev.holderAddress,
+    holderPubkey: next.holderPubkey || prev.holderPubkey,
+    deskName: prev.deskName || next.deskName,
+    deskPkHex: next.deskPkHex || prev.deskPkHex,
+    backupPkHex: next.backupPkHex || prev.backupPkHex,
+    oraclePkHex: next.oraclePkHex || prev.oraclePkHex,
+    intentAddress: next.intentAddress || prev.intentAddress,
+    vaultAddress: next.vaultAddress || prev.vaultAddress,
     fundingTxid: next.fundingTxid || prev.fundingTxid,
     fillTxid: next.fillTxid || prev.fillTxid,
     closeTxid: next.closeTxid || prev.closeTxid,
@@ -96,6 +106,7 @@ export function upsertPredictPosition(list: PredictPosition[], next: PredictPosi
     settleCents: next.settleCents || prev.settleCents,
     userPayoutSats: next.userPayoutSats ?? prev.userPayoutSats,
     deskPayoutSats: next.deskPayoutSats ?? prev.deskPayoutSats,
+    createdAt: prev.createdAt || next.createdAt,
   }
   const copy = [...list]
   copy[idx] = merged

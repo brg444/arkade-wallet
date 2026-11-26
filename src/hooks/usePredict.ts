@@ -228,21 +228,81 @@ export function usePredict(): UsePredictResult {
 
   const positionsRef = useRef(positions)
   positionsRef.current = positions
+  const refreshingRef = useRef(false)
+  const refreshQueuedRef = useRef(false)
+  const settledBackfillTriedRef = useRef<Set<string>>(new Set())
+  const storageKeyRef = useRef('')
+  const currentScopeKey = storageKeyId ? `${config.profile.id}:${storageKeyId}` : ''
+  storageKeyRef.current = currentScopeKey
+
+  useEffect(() => {
+    settledBackfillTriedRef.current = new Set()
+  }, [currentScopeKey])
 
   const refreshPositions = useCallback(async () => {
-    const current = positionsRef.current
-    const pending = current.filter((p) => p.phase !== 'settled' && p.phase !== 'refunded')
-    if (pending.length === 0) return
-    const updatedList = await Promise.all(
-      pending.map((p) => engine.refreshPosition(p, marketRef.current?.priceCents).catch(() => p)),
-    )
-    setPositions((prev) => {
-      let next = prev
-      for (const item of updatedList) next = upsertPredictPosition(next, item)
-      if (storageKeyId) writePredictPositions(config.profile.id, storageKeyId, next)
-      return next
-    })
+    if (refreshingRef.current) {
+      refreshQueuedRef.current = true
+      return
+    }
+    refreshingRef.current = true
+    const processedIds = new Set<string>()
+    try {
+      let runAgain = true
+      while (runAgain) {
+        runAgain = false
+        refreshQueuedRef.current = false
+        const scopeKey = storageKeyRef.current
+        const current = positionsRef.current
+        const pending = current.filter((p) => {
+          if (processedIds.has(p.id)) return false
+          if (p.phase !== 'settled' && p.phase !== 'refunded') return true
+          if (p.phase === 'settled' && (p.userPayoutSats === undefined || !p.settleCents)) {
+            return !settledBackfillTriedRef.current.has(p.id)
+          }
+          return false
+        })
+        if (pending.length > 0) {
+          for (const p of pending) {
+            processedIds.add(p.id)
+            if (p.phase === 'settled') settledBackfillTriedRef.current.add(p.id)
+          }
+          const updatedList = await Promise.all(
+            pending.map((p) => engine.refreshPosition(p, marketRef.current?.priceCents).catch(() => p)),
+          )
+          if (storageKeyRef.current !== scopeKey) break
+          setPositions((prev) => {
+            let next = prev
+            for (const item of updatedList) next = upsertPredictPosition(next, item)
+            if (storageKeyId) writePredictPositions(config.profile.id, storageKeyId, next)
+            return next
+          })
+        }
+        if (refreshQueuedRef.current) runAgain = true
+      }
+    } finally {
+      refreshingRef.current = false
+      refreshQueuedRef.current = false
+    }
   }, [config.profile.id, engine, storageKeyId])
+
+  const refreshKey = useMemo(
+    () =>
+      positions
+        .filter(
+          (p) =>
+            (p.phase !== 'settled' && p.phase !== 'refunded') ||
+            (p.phase === 'settled' && (p.userPayoutSats === undefined || !p.settleCents)),
+        )
+        .map((p) => `${p.id}:${p.phase}`)
+        .join(','),
+    [positions],
+  )
+
+  // Refresh immediately when active/incomplete positions load from storage or Nostr replay.
+  useEffect(() => {
+    if (!refreshKey) return
+    void refreshPositions()
+  }, [refreshKey, refreshPositions])
 
   // Refresh open/active positions every 6 seconds while on the Predict screen.
   useEffect(() => {

@@ -161,7 +161,9 @@ export default function PositionsList({ positions, priceCents, nowSec, onBack, o
                             <span className='activity-row__meta'>
                               {pos.settleCents
                                 ? t('predict.closedAt', { price: usdFromCents(BigInt(pos.settleCents)) })
-                                : t('predict.notFilled')}
+                                : pos.phase === 'settled'
+                                  ? t('predict.stakeIn', { amount: prettyNumber(Number(pos.stakeSats)) })
+                                  : t('predict.notFilled')}
                             </span>
                           </span>
                         </span>

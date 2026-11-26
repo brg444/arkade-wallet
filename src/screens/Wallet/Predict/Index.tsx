@@ -44,6 +44,7 @@ export default function Predict() {
     lowerMultiplier,
     positions,
     activeCount,
+    refreshPositions,
     requestQuote,
     fundQuote,
     cancelPosition,
@@ -64,6 +65,12 @@ export default function Predict() {
     const id = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1_000)
     return () => clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    if (view.name === 'positions' || view.name === 'position') {
+      void refreshPositions()
+    }
+  }, [view.name, refreshPositions])
 
   const stakeMin = config.profile.stakeMin
   const stakeMax = config.profile.stakeMax
