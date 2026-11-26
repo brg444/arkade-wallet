@@ -40,8 +40,11 @@ export interface UsdcSwapRecord {
    * wallet ever hearing back (a timeout, a closed tab), so a swap that only
    * got this far is still refunded when it can no longer complete. */
   fundingAttempted?: boolean
-  /** Refunds tried on a swap that is only known to have attempted funding. */
+  /** Refunds tried on a swap that is only known to have attempted funding,
+   * and when the last one went out: they are spaced, see
+   * {@link BLIND_REFUND_BACKOFF_MS}. */
   refundAttempts?: number
+  refundAttemptAt?: number
   continuation?: UsdcSwapContinuation
   /** When the continuation became needed, to bound how long it is retried. */
   continuationSince?: number
@@ -71,8 +74,14 @@ const NEEDS_REFUND = new Set([
 /** Statuses Satora reports before it has seen this wallet's funding. */
 const UNFUNDED = new Set(['pending', 'expired'])
 
-/** A refund on a swap that may never have been funded is tried this often. */
-export const MAX_BLIND_REFUND_ATTEMPTS = 5
+/**
+ * How long to wait before each refund try on a swap that may never have been
+ * funded. Spread over more than a day, so a refund that cannot go through yet
+ * (a timelock still running, a server briefly down) is not given up on within
+ * a minute of polling.
+ */
+export const BLIND_REFUND_BACKOFF_MS = [0, 60_000, 10 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000]
+export const MAX_BLIND_REFUND_ATTEMPTS = BLIND_REFUND_BACKOFF_MS.length
 /** How long a refunded swap keeps trying to continue on to Arkade. */
 export const CONTINUATION_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -86,6 +95,16 @@ export const needsRefund = (record: PhaseFields): boolean => {
   if (!NEEDS_REFUND.has(record.status)) return false
   if (record.funded) return true
   return Boolean(record.fundingAttempted) && (record.refundAttempts ?? 0) < MAX_BLIND_REFUND_ATTEMPTS
+}
+
+/** Whether the next spaced refund try on a not-known-funded swap is due. */
+export const blindRefundDue = (
+  record: Pick<UsdcSwapRecord, 'refundAttempts' | 'refundAttemptAt'>,
+  now = Date.now(),
+): boolean => {
+  const attempts = record.refundAttempts ?? 0
+  if (attempts >= MAX_BLIND_REFUND_ATTEMPTS) return false
+  return now - (record.refundAttemptAt ?? 0) >= BLIND_REFUND_BACKOFF_MS[attempts]
 }
 
 export const needsContinuation = (record: Pick<UsdcSwapRecord, 'continuation'>): boolean =>
@@ -136,6 +155,7 @@ export const mergeUsdcSwap = (existing: UsdcSwapRecord | undefined, incoming: Us
     funded: existing.funded || incoming.funded,
     fundingAttempted: existing.fundingAttempted || incoming.fundingAttempted || undefined,
     refundAttempts: Math.max(existing.refundAttempts ?? 0, incoming.refundAttempts ?? 0) || undefined,
+    refundAttemptAt: Math.max(existing.refundAttemptAt ?? 0, incoming.refundAttemptAt ?? 0) || undefined,
     continuation,
     continuationSince: existing.continuationSince ?? incoming.continuationSince,
     continuedTo: incoming.continuedTo ?? existing.continuedTo,

@@ -113,4 +113,30 @@ describe('advancing a USD swap', () => {
       ['swap-2', 'toArkade', true, 'ark1dest'],
     ])
   })
+
+  it('spaces out refund tries on a swap that only attempted funding', async () => {
+    const client = {
+      getSwap: vi.fn(async () => swapResponse({ direction: 'arkade_to_evm', status: 'expired' })),
+      refundSwap: vi.fn(async () => {
+        throw new Error('nothing to refund yet')
+      }),
+    } as unknown as Client
+    const attempted = record({ direction: 'toUsdc', funded: false, fundingAttempted: true })
+
+    // the first try goes out at once, and is on record before it can fail
+    await expect(advanceUsdcSwap(client, attempted, options)).rejects.toThrow('nothing to refund yet')
+    const afterFirst = loadUsdcSwaps()[0]
+    expect(afterFirst).toMatchObject({ refundAttempts: 1 })
+    expect(swapPhase(afterFirst)).toBe('pending')
+
+    // ten seconds later the loop is back: too soon, no second try
+    await advanceUsdcSwap(client, afterFirst, options)
+    expect(client.refundSwap).toHaveBeenCalledTimes(1)
+
+    // past the wait, it tries again
+    await expect(
+      advanceUsdcSwap(client, { ...afterFirst, refundAttemptAt: Date.now() - 61_000 }, options),
+    ).rejects.toThrow('nothing to refund yet')
+    expect(client.refundSwap).toHaveBeenCalledTimes(2)
+  })
 })

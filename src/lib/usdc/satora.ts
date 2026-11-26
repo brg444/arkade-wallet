@@ -19,6 +19,7 @@ import { ARBITRUM_CHAIN_ID, USDC_ARBITRUM_ADDRESS, usdcConfig } from './config'
 import type { UsdcSession } from './keys'
 import {
   CONTINUATION_WINDOW_MS,
+  blindRefundDue,
   isRefundedStatus,
   isUnfundedStatus,
   needsClaim,
@@ -353,9 +354,11 @@ export const advanceUsdcSwap = async (
   }
 
   if (needsRefund(next)) {
-    // a swap only known to have attempted funding gets a bounded number of tries
+    // a swap only known to have attempted funding gets a bounded number of
+    // tries, spaced out over more than a day
     if (!next.funded) {
-      next = { ...next, refundAttempts: (next.refundAttempts ?? 0) + 1 }
+      if (!blindRefundDue(next)) return { record: next }
+      next = { ...next, refundAttempts: (next.refundAttempts ?? 0) + 1, refundAttemptAt: Date.now() }
       persist(next)
     }
     if (next.direction === 'toUsdc') {

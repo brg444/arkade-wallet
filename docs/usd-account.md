@@ -47,7 +47,7 @@ The Satora and ZeroDev code paths load in their own chunk, only when the USD scr
   writers save the same record. A funding call that fails where the wallet cannot tell whether it landed
   closes the review and points at the USD activity, and Confirm is never offered a second time for it.
 - **After funding.** A swap that only attempted funding is still refunded when it cannot complete, for a
-  bounded number of tries, and Satora's own record of the funding transaction counts even on a swap it
+  bounded number of tries spaced over more than a day, and Satora's own record of the funding transaction counts even on a swap it
   has expired. A refunded USD to Bitcoin swap stays pending until its refund has been swapped on to
   Arkade: that need is recorded before the refund goes out and retried for a day. On unlock the index is
   reconciled against Satora's own store, so a swap created right before a crash is adopted.
