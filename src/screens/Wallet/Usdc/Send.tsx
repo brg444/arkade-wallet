@@ -256,12 +256,16 @@ export default function UsdcSend({ back }: { back: () => void }) {
                 </button>
               }
             />
-            <FlexCol gap='0.5rem'>
+            {crossChain ? (
+              <FlexCol gap='0.5rem'>
+                <Table data={summaryRows} />
+                <Text small color='neutral-500' wrap>
+                  {t('usdc.crossChainHint', { network: selectedNetwork.name })}
+                </Text>
+              </FlexCol>
+            ) : (
               <Table data={summaryRows} />
-              <Text small color='neutral-500' wrap>
-                {crossChain ? t('usdc.crossChainHint', { network: selectedNetwork.name }) : t('usdc.networkFeeHint')}
-              </Text>
-            </FlexCol>
+            )}
           </FlexCol>
         </Padded>
       </Content>

@@ -2179,12 +2179,17 @@ html.palette-dark .send-asset-menu {
 
 .swap-figure {
   display: flex;
-  /* floor at its own content; it grows to fill whatever the pair and keypad leave */
-  flex: 1 0 auto;
+  /* takes whatever height the pair, keypad and button leave, and the amount
+     sizes itself to that height (cqh), so the screen fits without scrolling.
+     The floor keeps the amount and its note readable: only screens too short
+     for even that (an SE in Safari) scroll */
+  min-height: 5.5rem;
+  flex: 1 1 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
+  gap: clamp(0.5rem, 1.5dvh, 1rem);
+  container-type: size;
 }
 
 .swap-figure__note {
@@ -2209,7 +2214,7 @@ html.palette-dark .send-asset-menu {
   color: var(--fg);
   font-family: var(--font-family-heading);
   /* --swap-amount-scale steps down for long amounts (set inline per length) */
-  font-size: calc(5.25rem * var(--swap-amount-scale, 1));
+  font-size: calc(min(5.25rem, 40cqh) * var(--swap-amount-scale, 1));
   font-weight: 500;
   letter-spacing: -0.05em;
   line-height: 1;
@@ -2411,6 +2416,11 @@ html.palette-dark .send-asset-menu {
   padding: 0.25rem 0 0;
 }
 
+/* keys give back height on shorter screens before anything else has to */
+.keypad.swap-keypad button {
+  height: clamp(2.75rem, 7.25dvh, 3.875rem);
+}
+
 @keyframes swap-amount-character-in {
   from {
     opacity: 0;
@@ -2423,19 +2433,9 @@ html.palette-dark .send-asset-menu {
   }
 }
 
-/* iPhones in Safari land between 700 and 740: the full-size keypad leaves no room there */
 @media (max-height: 740px) {
   .swap-composer {
     gap: 0.5rem;
-  }
-
-  .swap-figure {
-    min-height: 0;
-    gap: 0.5rem;
-  }
-
-  .swap-amount-value {
-    font-size: calc(3.5rem * var(--swap-amount-scale, 1));
   }
 
   .swap-pair__row {
@@ -2448,23 +2448,6 @@ html.palette-dark .send-asset-menu {
     height: 2rem;
     margin: -1.125rem 0;
     box-shadow: 0 0 0 3px var(--bg);
-  }
-
-  .keypad.swap-keypad button {
-    height: 3rem;
-  }
-}
-
-@media (max-height: 600px) {
-  /* scoped to the lab: the stage rules further down would otherwise win */
-  .asset-swap-lab .swap-flow-stage--compose,
-  .asset-swap-lab .swap-flow-stage--compose .swap-composer,
-  .asset-swap-lab .swap-figure {
-    flex: none;
-  }
-
-  .swap-figure {
-    padding-block: 0.5rem;
   }
 }
 
