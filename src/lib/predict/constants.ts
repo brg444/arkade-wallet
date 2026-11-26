@@ -18,8 +18,8 @@ export const DEFAULT_RELAYS = ['wss://nostr.arkade.sh']
 export type PredictKind = 2 | 3 // 2 = Higher, 3 = Lower
 
 export const PREDICT_GRID_S = 300
-export const PREDICT_LOCK_S = 60
-export const PREDICT_MIN_LEFT_S = 60
+export const PREDICT_LOCK_S = 30
+export const PREDICT_MIN_LEFT_S = 30
 export const PREDICT_MAX_AHEAD_S = 3600
 export const STAKE_MIN = 25_000n
 export const STAKE_MAX_MUTINYNET = 1_000_000n

@@ -11,7 +11,7 @@ import {
   type PredictEngine,
   type PredictQuote,
 } from '../lib/predict/engine'
-import { fetchPredictMarket, resolveWindowLineCents, type PredictMarketSnapshot } from '../lib/predict/marketFeed'
+import { fetchPredictMarket, type PredictMarketSnapshot } from '../lib/predict/marketFeed'
 import { watchNostrPredictPositions } from '../lib/predict/nostrRfq'
 import { payoutMultiplier, predictMultiplier, upcomingWindows } from '../lib/predict/pricing'
 import {
@@ -33,7 +33,6 @@ export interface UsePredictResult {
   selectedExpiry: number
   setSelectedExpiry: (expiry: number) => void
   lineCents: number | null
-  lineOfficial: boolean
   secondsToClose: number
   higherMultiplier: number | null
   lowerMultiplier: number | null
@@ -197,15 +196,7 @@ export function usePredict(): UsePredictResult {
     }
   }, [windows, selectedExpiry])
 
-  const { lineCents, official: lineOfficial } = useMemo(
-    () =>
-      resolveWindowLineCents(
-        market?.source === 'dia' ? market.samples : [],
-        selectedExpiry,
-        market?.priceCents ?? null,
-      ),
-    [market?.source, market?.samples, market?.priceCents, selectedExpiry],
-  )
+  const lineCents = market?.priceCents ?? null
 
   const chartPoints = useMemo<LivelinePoint[]>(
     () => (market?.samples ?? []).map((s) => ({ time: s.time, value: s.priceCents / 100 })),
@@ -262,15 +253,16 @@ export function usePredict(): UsePredictResult {
   const requestQuote = useCallback(
     async (kind: PredictKind, stakeSats: bigint) => {
       if (!holderAddress) throw new Error('Wallet address is not ready yet')
-      if (!lineCents || !selectedExpiry) throw new Error('Waiting for live BTC price')
+      const liveCents = marketRef.current?.priceCents ?? lineCents
+      if (!liveCents || !selectedExpiry) throw new Error('Waiting for live BTC price')
       return engine.requestQuote({
         kind,
-        lineCents,
+        lineCents: liveCents,
         stakeSats,
         expiry: selectedExpiry,
         holderAddress,
         holderPubkey,
-        spotCents: marketRef.current?.priceCents,
+        spotCents: liveCents,
         vol: marketRef.current?.vol,
       })
     },
@@ -349,7 +341,6 @@ export function usePredict(): UsePredictResult {
     selectedExpiry,
     setSelectedExpiry,
     lineCents,
-    lineOfficial,
     secondsToClose,
     higherMultiplier,
     lowerMultiplier,

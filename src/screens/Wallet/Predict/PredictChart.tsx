@@ -13,8 +13,6 @@ interface PredictChartProps {
   nowSec: number
   /** Seconds of history before the window opens. */
   lead?: number
-  /** Mark where the window opens, in place of the start time. */
-  showOpen?: boolean
 }
 
 const PAD_TOP = 10
@@ -22,19 +20,10 @@ const PAD_BOTTOM = 26
 const TAG_W = 96
 
 /**
- * The price against the price to beat, from a little before the window opens
- * to its close. The side that wins is tinted, the time still to run is shaded,
- * and the close is a dashed rule at the right edge.
+ * The price against the price to beat, up to the close. The side that wins is
+ * tinted, the time still to run is shaded, and the close is a dashed rule at the right edge.
  */
-export default function PredictChart({
-  samples,
-  lineCents,
-  expiry,
-  kind,
-  nowSec,
-  lead = 60,
-  showOpen = false,
-}: PredictChartProps) {
+export default function PredictChart({ samples, lineCents, expiry, kind, nowSec, lead = 60 }: PredictChartProps) {
   const { t } = useTranslation()
   const box = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
@@ -80,9 +69,6 @@ export default function PredictChart({
     const lineY = lineCents != null ? y(lineCents) : null
     const nowX = Math.min(w, Math.max(0, x(nowSec)))
     const tagY = lineY != null ? Math.min(bottom - 11, Math.max(PAD_TOP + 11, lineY)) : 0
-    const opens = expiry - 300
-    const openX = x(opens)
-    const markOpen = showOpen && openX > 0 && openX < w - 40
 
     body = (
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden='true'>
@@ -100,7 +86,6 @@ export default function PredictChart({
         ) : null}
         {lineY != null ? <line className='predict-chart__line' x1={0} x2={w} y1={lineY} y2={lineY} /> : null}
         <line className='predict-chart__close' x1={w - 0.5} x2={w - 0.5} y1={PAD_TOP} y2={bottom} />
-        {markOpen ? <line className='predict-chart__open' x1={openX} x2={openX} y1={PAD_TOP} y2={bottom} /> : null}
         <path className='predict-chart__price' d={path} />
         <circle className='predict-chart__halo' cx={lx} cy={ly} r={9} />
         <circle className='predict-chart__dot' cx={lx} cy={ly} r={4.5} />
@@ -112,15 +97,9 @@ export default function PredictChart({
             </text>
           </>
         ) : null}
-        {markOpen ? (
-          <text className='predict-chart__axis' x={openX} y={h - 8} textAnchor={openX < 60 ? 'start' : 'middle'}>
-            {t('predict.openAxis', { time: formatClockTime(opens) })}
-          </text>
-        ) : (
-          <text className='predict-chart__axis' x={0} y={h - 8}>
-            {formatClockTime(start)}
-          </text>
-        )}
+        <text className='predict-chart__axis' x={0} y={h - 8}>
+          {formatClockTime(start)}
+        </text>
         <text className='predict-chart__axis' x={w} y={h - 8} textAnchor='end'>
           {t('predict.closeAxis', { time: formatClockTime(expiry) })}
         </text>

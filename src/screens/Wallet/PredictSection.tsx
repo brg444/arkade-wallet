@@ -4,7 +4,7 @@ import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { prettyFiatAmount, prettyNumber } from '../../lib/format'
 import { hapticLight } from '../../lib/haptics'
 import { getPredictConfig, type PredictKind } from '../../lib/predict/constants'
-import { fetchPredictMarket, resolveWindowLineCents, type PredictMarketSnapshot } from '../../lib/predict/marketFeed'
+import { fetchPredictMarket, type PredictMarketSnapshot } from '../../lib/predict/marketFeed'
 import { formatCountdown, predictMultiplier, predictPayout, upcomingWindows } from '../../lib/predict/pricing'
 import { Currencies } from '../../lib/types'
 import { AspContext } from '../../providers/asp'
@@ -69,7 +69,7 @@ export default function PredictSection() {
   // What a sample stake comes back as on each side.
   const payouts = useMemo(() => {
     if (!market || !next) return null
-    const { lineCents } = resolveWindowLineCents(market.samples, next, market.priceCents)
+    const lineCents = market.priceCents
     if (!lineCents) return null
     const years = Math.max(60, next - nowSec) / (365.25 * 86_400)
     const fiat = config.currency !== Currencies.BTC && toFiat(100_000_000) > 0

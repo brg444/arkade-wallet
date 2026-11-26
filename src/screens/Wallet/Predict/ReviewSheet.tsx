@@ -87,7 +87,8 @@ export default function ReviewSheet({
   const quoteExpired = Boolean(quote && ttlLeft <= 0)
   const winSats = quote ? netPayout(quote.payoutSats) : 0n
   const showFiat = config.currency !== Currencies.BTC && toFiat(100_000_000) > 0
-  const line = lineCents ? usdFromCents(lineCents) : '—'
+  const effectiveLineCents = quote?.lineCents ?? lineCents
+  const line = effectiveLineCents ? usdFromCents(effectiveLineCents) : '—'
   const closeTime = formatClockTime(expiry)
 
   const handleConfirm = async () => {

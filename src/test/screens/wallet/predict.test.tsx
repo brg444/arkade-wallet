@@ -144,16 +144,16 @@ describe('Predict screen & desktop navigation', () => {
     await waitFor(() => expect(screen.getByTestId('predict-detail-hero')).toBeInTheDocument())
   })
 
-  it('says when a window is not open yet and holds the review until it is', async () => {
-    // 100 seconds before a close: too late for this window, so the next one is picked and has not opened.
-    vi.setSystemTime((openWindow - 30 + 200) * 1000)
+  it('rolls straight to the next 5-minute close and stays open for review at any time', async () => {
+    // 50 seconds before a close: inside the 60s cutoff, so it rolls to the next close and stays immediately open.
+    vi.setSystemTime((openWindow - 30 + 250) * 1000)
     localStorage.setItem('arkade-predict-intro-v1', '1')
     renderPredict()
     await waitFor(() => expect(screen.getByTestId('predict-spot-price')).toHaveTextContent('$65,000.00'))
 
-    expect(screen.getByTestId('predict-window-state')).toHaveTextContent('Not open yet')
-    expect(screen.getByText(/You can enter once it opens at/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Review prediction' })).toBeDisabled()
+    expect(screen.getByTestId('predict-window-state')).toHaveTextContent('Open')
+    expect(screen.getByTestId('predict-line-price')).toHaveTextContent('$65,000.00')
+    expect(screen.getByRole('button', { name: 'Review prediction' })).toBeEnabled()
   })
 
   it('refuses a stake below the minimum', async () => {

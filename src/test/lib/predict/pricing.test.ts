@@ -55,7 +55,7 @@ describe('predict pricing & window math', () => {
     expect(windows).toHaveLength(3)
     for (const w of windows) {
       expect(w % 300).toBe(0)
-      expect(w).toBeGreaterThanOrEqual(1_700_000_000 + 120)
+      expect(w).toBeGreaterThanOrEqual(1_700_000_000 + 60)
     }
     const open = windowOpen(windows[0]!)
     const picked = openingSample(

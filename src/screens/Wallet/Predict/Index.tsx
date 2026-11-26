@@ -11,8 +11,8 @@ import Glyph from '../../../icons/Glyph'
 import { usePredict } from '../../../hooks/usePredict'
 import { prettyNumber, toSatoshis } from '../../../lib/format'
 import { hapticLight, hapticSubtle } from '../../../lib/haptics'
-import { PREDICT_LOCK_S, PREDICT_MIN_LEFT_S, type PredictKind } from '../../../lib/predict/constants'
-import { formatCountdown, predictPayout, usdFromCents, windowOpen } from '../../../lib/predict/pricing'
+import { type PredictKind } from '../../../lib/predict/constants'
+import { formatCountdown, predictPayout, usdFromCents } from '../../../lib/predict/pricing'
 import { FiatContext } from '../../../providers/fiat'
 import { useTranslation } from '../../../providers/language'
 import { WalletContext } from '../../../providers/wallet'
@@ -21,7 +21,7 @@ import PositionDetail from './PositionDetail'
 import PositionsList from './PositionsList'
 import PredictChart from './PredictChart'
 import ReviewSheet from './ReviewSheet'
-import { formatClockTime, formatGap, formatMultiplier, formatSats } from './format'
+import { formatClockTime, formatMultiplier, formatSats } from './format'
 
 const MAINNET_PRESETS = [25_000, 50_000, 75_000, 100_000]
 const TESTNET_PRESETS = [25_000, 50_000, 100_000, 250_000]
@@ -40,7 +40,6 @@ export default function Predict() {
     selectedExpiry,
     setSelectedExpiry,
     lineCents,
-    lineOfficial,
     higherMultiplier,
     lowerMultiplier,
     positions,
@@ -86,27 +85,11 @@ export default function Predict() {
     return gross > stakeSats ? gross : null
   }, [multiplier, stakeSats])
 
-  // A window opens five minutes before its close and takes entries until two minutes before it.
-  const opensAt = selectedExpiry ? windowOpen(selectedExpiry) : 0
-  const enterBy = selectedExpiry - PREDICT_LOCK_S - PREDICT_MIN_LEFT_S
-  const windowState: 'upcoming' | 'setting' | 'open' = nowSec < opensAt ? 'upcoming' : lineOfficial ? 'open' : 'setting'
+  const canReview = Boolean(lineCents && selectedExpiry && estimate != null && !stakeError)
 
-  // Demo quotes are simulated, so once a window is open they do not wait for its official line.
-  const takesEntries = windowState === 'open' || (config.demoMode && windowState === 'setting')
-  const canReview = Boolean(takesEntries && lineCents && selectedExpiry && estimate != null && !stakeError)
-
-  const gapCents = market && lineCents && lineOfficial ? market.priceCents - lineCents : null
   const status = !market
     ? t('predict.loadingMarket')
-    : windowState === 'upcoming'
-      ? t('predict.upcomingStatus', { time: formatClockTime(opensAt) })
-      : windowState === 'setting'
-        ? t('predict.settingLine')
-        : gapCents == null || gapCents === 0
-          ? t('predict.marketFlat')
-          : gapCents > 0
-            ? t('predict.marketAbove', { gap: formatGap(gapCents) })
-            : t('predict.marketBelow', { gap: formatGap(gapCents) })
+    : t('predict.liveSpotStatus', { time: formatClockTime(selectedExpiry) })
 
   const saveStake = (value: string, mode: KeyboardInputMode) => {
     const n = Number(value.replaceAll(',', ''))
@@ -211,34 +194,23 @@ export default function Predict() {
                   </p>
                   <p className='predict-countdown'>
                     <span data-testid='predict-countdown'>
-                      {selectedExpiry
-                        ? formatCountdown(windowState === 'upcoming' ? opensAt - nowSec : enterBy - nowSec)
-                        : '–:––'}
+                      {selectedExpiry ? formatCountdown(selectedExpiry - nowSec) : '–:––'}
                     </span>
-                    <span className='predict-countdown__label'>
-                      {windowState === 'upcoming' ? t('predict.untilOpen') : t('predict.leftToEnter')}
-                    </span>
+                    <span className='predict-countdown__label'>{t('predict.untilClose')}</span>
                   </p>
                 </div>
                 <p className='predict-status' aria-live='polite'>
-                  <span
-                    className={windowState === 'open' ? 'predict-tag predict-tag--won' : 'predict-tag'}
-                    data-testid='predict-window-state'
-                  >
-                    {windowState === 'open' ? t('predict.windowOpen') : t('predict.windowUpcoming')}
+                  <span className='predict-tag predict-tag--won' data-testid='predict-window-state'>
+                    {t('predict.windowOpen')}
                   </span>
-                  {gapCents != null && gapCents !== 0 ? (
-                    <Glyph name={gapCents > 0 ? 'arrowUp' : 'arrowDown'} size={14} strokeWidth={2.25} />
-                  ) : null}
                   {status}
                 </p>
                 <PredictChart
                   samples={market?.samples ?? []}
-                  lineCents={lineOfficial ? lineCents : null}
+                  lineCents={lineCents}
                   expiry={selectedExpiry}
                   kind={kind}
                   nowSec={nowSec}
-                  showOpen
                 />
               </section>
 
@@ -278,9 +250,7 @@ export default function Predict() {
                   <div className='predict-field'>
                     <span className='predict-field__label'>{t('predict.priceToBeat')}</span>
                     <span className='predict-field__value' data-testid='predict-line-price'>
-                      {lineCents && lineOfficial
-                        ? usdFromCents(lineCents)
-                        : t('predict.lineSetsAtShort', { time: formatClockTime(opensAt) })}
+                      {lineCents ? usdFromCents(lineCents) : '—'}
                     </span>
                   </div>
                   <button
@@ -325,8 +295,6 @@ export default function Predict() {
           <p className='predict-estimate predict-estimate--error' role='alert'>
             {stakeError}
           </p>
-        ) : !takesEntries ? (
-          <p className='predict-estimate'>{t('predict.entriesOpenAt', { time: formatClockTime(opensAt) })}</p>
         ) : estimate != null ? (
           <p className='predict-estimate' data-testid='predict-est-payout'>
             {t('predict.estimate', { amount: formatSats(estimate), multiplier: formatMultiplier(multiplier) })}
@@ -363,11 +331,7 @@ export default function Predict() {
             >
               <span className='predict-field__value'>{formatClockTime(expiry)}</span>
               <span className='predict-field__label'>
-                {nowSec >= windowOpen(expiry)
-                  ? t('predict.openNow', {
-                      time: formatCountdown(expiry - PREDICT_LOCK_S - PREDICT_MIN_LEFT_S - nowSec),
-                    })
-                  : t('predict.opensAtRow', { time: formatClockTime(windowOpen(expiry)) })}
+                {t('predict.closesInShort', { time: formatCountdown(expiry - nowSec) })}
                 {expiry === selectedExpiry ? <Glyph name='check' size={18} strokeWidth={2.25} /> : null}
               </span>
             </button>
