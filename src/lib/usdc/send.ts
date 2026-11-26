@@ -40,6 +40,21 @@ export class UsdcSendUnavailable extends Error {
   }
 }
 
+/**
+ * The UserOperation was accepted by the bundler, then waiting for its receipt
+ * failed or timed out. The transfer may still land on Arbitrum, so the caller
+ * must not claim funds stayed put or offer a second Send tap.
+ */
+export class UsdcSendUncertain extends Error {
+  readonly userOpHash: string
+  constructor(userOpHash: string, cause: unknown) {
+    super('the send was submitted but did not confirm in time')
+    this.name = 'UsdcSendUncertain'
+    this.userOpHash = userOpHash
+    this.cause = cause
+  }
+}
+
 const buildClients = async (session: UsdcSession) => {
   const { rpcUrl, zerodevRpcUrl } = usdcConfig()
   if (!zerodevRpcUrl) throw new UsdcSendUnavailable()
@@ -111,7 +126,12 @@ export const sendUsdc = async (session: UsdcSession, to: string, amount: bigint)
   const userOpHash = await kernelClient.sendUserOperation({
     callData: await account.encodeCalls(await transferCalls(paymasterClient, to, amount)),
   })
-  const receipt = await kernelClient.waitForUserOperationReceipt({ hash: userOpHash, timeout: 120_000 })
+  let receipt: Awaited<ReturnType<typeof kernelClient.waitForUserOperationReceipt>>
+  try {
+    receipt = await kernelClient.waitForUserOperationReceipt({ hash: userOpHash, timeout: 120_000 })
+  } catch (err) {
+    throw new UsdcSendUncertain(userOpHash, err)
+  }
   if (!receipt.success) throw new Error('The transfer was included but reverted')
   return { userOpHash, txHash: receipt.receipt.transactionHash }
 }

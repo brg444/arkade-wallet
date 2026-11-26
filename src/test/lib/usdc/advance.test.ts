@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { advanceUsdcSwap, reconcileStoredSwaps } from '../../../lib/usdc/satora'
-import { loadUsdcSwaps, saveUsdcSwap, swapPhase, type UsdcSwapRecord } from '../../../lib/usdc/swaps'
+import {
+  MAX_BLIND_REFUND_ATTEMPTS,
+  UsdcStoreWiped,
+  loadUsdcSwaps,
+  saveUsdcSwap,
+  swapPhase,
+  type UsdcSwapRecord,
+} from '../../../lib/usdc/swaps'
 
 type Client = Parameters<typeof advanceUsdcSwap>[0]
 
@@ -226,5 +233,87 @@ describe('advancing a USD swap', () => {
     const late = make(past)
     await advanceUsdcSwap(late, record(), options)
     expect(late.refundEvmSponsored).toHaveBeenCalledWith('swap-1')
+  })
+
+  it('does not mark an unfunded toUsdc swap funded when refundSwap resolves with success: false', async () => {
+    const client = {
+      getSwap: vi.fn(async () => swapResponse({ direction: 'arkade_to_evm', status: 'expired' })),
+      refundSwap: vi.fn(async () => ({ success: false, message: 'No VTXOs found at the VHTLC address.' })),
+    } as unknown as Client
+    const attempted = record({ direction: 'toUsdc', funded: false, fundingAttempted: true })
+
+    await expect(advanceUsdcSwap(client, attempted, options)).rejects.toThrow('No VTXOs found at the VHTLC address.')
+    const afterFirst = loadUsdcSwaps()[0]
+    expect(afterFirst.funded).toBe(false)
+    expect(afterFirst.refundAttempts).toBe(1)
+    expect(swapPhase(afterFirst)).toBe('pending')
+
+    // once all spaced blind attempts are exhausted, the swap settles to failed
+    const exhausted = { ...afterFirst, refundAttempts: MAX_BLIND_REFUND_ATTEMPTS }
+    expect(swapPhase(exhausted)).toBe('failed')
+  })
+
+  it('surfaces claim and claimArkade failures returned as { success: false }', async () => {
+    const toUsdcClient = {
+      getSwap: vi.fn(async () => swapResponse({ direction: 'arkade_to_evm', status: 'serverfunded' })),
+      claim: vi.fn(async () => ({ success: false, message: 'Swap not found in local storage.' })),
+    } as unknown as Client
+    await expect(
+      advanceUsdcSwap(toUsdcClient, record({ direction: 'toUsdc', status: 'serverfunded' }), options),
+    ).rejects.toThrow('Swap not found in local storage.')
+
+    const toArkadeClient = {
+      getSwap: vi.fn(async () => swapResponse({ direction: 'evm_to_arkade', status: 'serverfunded' })),
+      claimArkade: vi.fn(async () => ({ success: false, message: 'No VTXOs found at VHTLC.' })),
+    } as unknown as Client
+    await expect(
+      advanceUsdcSwap(toArkadeClient, record({ direction: 'toArkade', status: 'serverfunded' }), options),
+    ).rejects.toThrow('No VTXOs found at VHTLC.')
+  })
+
+  it('falls back to a read-only getSwap when the swap is absent from IndexedDB', async () => {
+    const client = {
+      getSwap: vi.fn(async (_id: string, opts?: { updateStorage?: boolean }) => {
+        if (opts?.updateStorage) throw new Error('Swap not found: swap-1')
+        return swapResponse({ direction: 'arkade_to_evm', status: 'expired' })
+      }),
+    } as unknown as Client
+
+    const { record: next } = await advanceUsdcSwap(
+      client,
+      record({ direction: 'toUsdc', status: 'pending', funded: false }),
+      options,
+    )
+    expect(client.getSwap).toHaveBeenCalledWith('swap-1', { updateStorage: true })
+    expect(client.getSwap).toHaveBeenCalledWith('swap-1', { updateStorage: false })
+    expect(next.status).toBe('expired')
+    expect(swapPhase(next)).toBe('failed')
+  })
+
+  it('aborts continueRefund before submitting if a wallet reset landed during eligibility lookup', async () => {
+    let wiped = false
+    const client = {
+      getSwap: vi.fn(async () => swapResponse({ status: 'clientrefunded' })),
+      getRefundedEvmSwapContinuation: vi.fn(async () => {
+        wiped = true
+        return { eligible: true }
+      }),
+      continueRefundedEvmSwap: vi.fn(),
+    } as unknown as Client
+    const refunded = record({
+      status: 'clientrefunded',
+      continuation: 'needed',
+      continuationSince: Date.now() - 1_000,
+    })
+
+    await expect(
+      advanceUsdcSwap(client, refunded, {
+        ...options,
+        assertLive: () => {
+          if (wiped) throw new UsdcStoreWiped()
+        },
+      }),
+    ).rejects.toThrow(UsdcStoreWiped)
+    expect(client.continueRefundedEvmSwap).not.toHaveBeenCalled()
   })
 })

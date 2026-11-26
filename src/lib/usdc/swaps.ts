@@ -187,6 +187,18 @@ export const beginFunding = (id: string): void => void funding.add(id)
 export const endFunding = (id: string): void => void funding.delete(id)
 export const isFunding = (id: string): boolean => funding.has(id)
 
+// Swaps between Satora creation and either indexing or deletion on moved terms.
+// Unlock reconcile defers while any are in flight so it never adopts a swap
+// that is about to be deleted or has not yet been indexed.
+let creatingSwaps = 0
+export const beginCreatingSwap = (): void => {
+  creatingSwaps += 1
+}
+export const endCreatingSwap = (): void => {
+  creatingSwaps = Math.max(0, creatingSwaps - 1)
+}
+export const isCreatingSwap = (): boolean => creatingSwaps > 0
+
 // The Satora client lives in a lazy chunk; once built it registers how to
 // drop itself and empty its stores, so lock and reset reach it without
 // loading that chunk themselves.

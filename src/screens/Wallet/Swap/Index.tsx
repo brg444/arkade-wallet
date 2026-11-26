@@ -193,6 +193,14 @@ export default function WalletSwap() {
   const usdRow = rows.find((row) => row.assetId === USD_ACCOUNT_ID)
   // a USD-designated Arkade asset with a market is the account's Arkade rail
   const arkadeUsdAsset = usdc.available ? swapAssets.find((asset) => asset.currency === Currencies.USD) : undefined
+  // only the rails that can actually be swapped here count toward the shown
+  // fiat value, so balance and fiatText agree when an Arkade dollar has no market
+  const usdSwappableFiat =
+    usdRow?.hasFiatPrice && usdRow.sources
+      ? usdRow.sources
+          .filter((source) => source.rail === 'arbitrum' || source.assetId === arkadeUsdAsset?.assetId)
+          .reduce((sum, source) => sum + source.fiatAmount, 0)
+      : usdRow?.fiatAmount
   const usdAsset: SwapAsset | undefined = usdc.available
     ? {
         assetId: USD_ACCOUNT_ID,
@@ -207,9 +215,10 @@ export default function WalletSwap() {
           (arkadeUsdAsset
             ? normalizeAssetMinorUnits(assetBalanceAtomic(arkadeUsdAsset), arkadeUsdAsset.decimals, 2)
             : BigInt(0)),
-        fiatText: usdRow?.hasFiatPrice
-          ? prettyFiatAmount(usdRow.fiatAmount, config.currency, { bitcoinUnit: config.unit })
-          : undefined,
+        fiatText:
+          usdRow?.hasFiatPrice && usdSwappableFiat !== undefined
+            ? prettyFiatAmount(usdSwappableFiat, config.currency, { bitcoinUnit: config.unit })
+            : undefined,
         usdPrice: 1,
       }
     : undefined

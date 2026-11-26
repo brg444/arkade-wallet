@@ -7,6 +7,7 @@ import { getUsdcSession, onUsdcSession, type UsdcSession } from '../lib/usdc/key
 import {
   USDC_SWAPS_STORAGE_KEY,
   UsdcStoreWiped,
+  isCreatingSwap,
   isFunding,
   loadUsdcSwaps,
   satoraWipeCount,
@@ -22,6 +23,7 @@ import { WalletContext } from './wallet'
 const BALANCE_POLL_MS = 30_000
 const SWAP_POLL_MS = 10_000
 const RECONCILE_RETRY_MS = 60_000
+const RECONCILE_DEFER_MS = 2_000
 const SWAP_DRIVER_LOCK = 'usdc-swap-driver'
 
 interface UsdcContextProps {
@@ -89,10 +91,13 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
 
   const refresh = useCallback(async () => {
     if (!address) return
+    const generation = satoraWipeCount()
     const [balanceResult, transfersResult] = await Promise.allSettled([
       readUsdcBalance(address),
       fetchUsdcTransfers(address),
     ])
+    // Locked, reset, or switched wallet while the fetch was in flight.
+    if (satoraWipeCount() !== generation || getUsdcSession()?.address !== address) return
     if (balanceResult.status === 'fulfilled') setBalance(balanceResult.value)
     else consoleError(balanceResult.reason, 'failed to read USDC balance')
     if (transfersResult.status === 'fulfilled') setTransfers(transfersResult.value)
@@ -109,6 +114,33 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
     setSwaps(saveUsdcSwap(record))
   }, [])
 
+  // Serializes swap-driving and unlock reconcile across tabs (Web Locks) and
+  // within this tab (`advancing`), so reconcile never overlaps with an active
+  // advance pass.
+  const runExclusive = useCallback(async (mode: 'wait' | 'skip', task: () => Promise<void>): Promise<boolean> => {
+    const runInTab = async (): Promise<boolean> => {
+      if (advancing.current) return false
+      advancing.current = true
+      try {
+        await task()
+        return true
+      } finally {
+        advancing.current = false
+      }
+    }
+    if (typeof navigator !== 'undefined' && navigator.locks) {
+      if (mode === 'skip') {
+        let ran = false
+        await navigator.locks.request(SWAP_DRIVER_LOCK, { ifAvailable: true }, async (lock) => {
+          if (lock) ran = await runInTab()
+        })
+        return ran
+      }
+      return navigator.locks.request(SWAP_DRIVER_LOCK, () => runInTab())
+    }
+    return runInTab()
+  }, [])
+
   // Once per unlock, whether or not anything is pending here: adopt swaps
   // Satora's own store knows and this index does not (a continuation created
   // right before a crash, an index lost to storage eviction). Satora's store
@@ -118,34 +150,64 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
     if (reconciledFor.current === session.address) return
     let cancelled = false
     const generation = satoraWipeCount()
-    const live = () => !cancelled && satoraWipeCount() === generation
-    const reconcile = async () => {
+    const live = () => !cancelled && satoraWipeCount() === generation && getUsdcSession()?.address === session.address
+    const reconcile = async (): Promise<'done' | 'defer'> => {
       const ids = await storedSatoraSwapIds()
+      if (!live()) return 'done'
       const known = new Set(loadUsdcSwaps().map((record) => record.id))
       if (ids === undefined || ids.some((id) => !known.has(id))) {
-        const { satoraClient, reconcileStoredSwaps } = await import('../lib/usdc/satora')
-        if (!live()) return
-        const client = await satoraClient(session, arkServerUrl)
-        const { offchainAddr } = await getReceivingAddresses(svcWallet)
-        const adopted = await reconcileStoredSwaps(client, loadUsdcSwaps(), offchainAddr)
-        if (!live()) return
-        for (const record of adopted) saveUsdcSwap(record)
-        if (adopted.length) setSwaps(loadUsdcSwaps())
+        if (isCreatingSwap()) return 'defer'
+        let deferred = false
+        const ran = await runExclusive('wait', async () => {
+          if (!live()) return
+          if (isCreatingSwap()) {
+            deferred = true
+            return
+          }
+          const currentKnown = new Set(loadUsdcSwaps().map((record) => record.id))
+          if (ids !== undefined && !ids.some((id) => !currentKnown.has(id))) return
+          const { satoraClient, reconcileStoredSwaps } = await import('../lib/usdc/satora')
+          if (!live()) return
+          const client = await satoraClient(session, arkServerUrl)
+          const { offchainAddr } = await getReceivingAddresses(svcWallet)
+          const adopted = await reconcileStoredSwaps(client, loadUsdcSwaps(), offchainAddr)
+          if (!live()) return
+          if (isCreatingSwap()) {
+            deferred = true
+            return
+          }
+          // Only adopt ids still missing from the index: never overwrite a
+          // swap created or advanced while listAllSwaps was in flight.
+          const latestKnown = new Set(loadUsdcSwaps().map((record) => record.id))
+          let added = 0
+          for (const record of adopted) {
+            if (latestKnown.has(record.id)) continue
+            saveUsdcSwap(record)
+            added += 1
+          }
+          if (added > 0) setSwaps(loadUsdcSwaps())
+        })
+        if (!ran || deferred) return 'defer'
       }
       if (live()) reconciledFor.current = session.address
+      return 'done'
     }
     let retry: number | undefined
     const attempt = () =>
-      reconcile().catch((err) => {
-        consoleError(err, 'failed to reconcile USDC swaps')
-        if (live()) retry = window.setTimeout(attempt, RECONCILE_RETRY_MS)
-      })
+      reconcile()
+        .then((outcome) => {
+          if (outcome === 'defer' && live()) retry = window.setTimeout(attempt, RECONCILE_DEFER_MS)
+        })
+        .catch((err) => {
+          consoleError(err, 'failed to reconcile USDC swaps')
+          if (live()) retry = window.setTimeout(attempt, RECONCILE_RETRY_MS)
+        })
     attempt()
     return () => {
       cancelled = true
       window.clearTimeout(retry)
     }
-  }, [session, available, arkServerUrl, svcWallet])
+  }, [session, available, arkServerUrl, svcWallet, runExclusive])
 
   // Drives every unfinished swap to its end, across reloads: claims once
   // Satora has locked its side, refunds when a swap can no longer complete,
@@ -161,12 +223,15 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
       // and so do the writes.
       const generation = satoraWipeCount()
       const { satoraClient, advanceUsdcSwap } = await import('../lib/usdc/satora')
-      // nor rebuild a client from a root key the reset has just dropped
-      if (satoraWipeCount() !== generation) return
+      // Do not rebuild a client (which holds the root xprv) after a lock or reset.
+      if (cancelled || satoraWipeCount() !== generation || !getUsdcSession()) return
       const client = await satoraClient(session, arkServerUrl)
       const { offchainAddr } = await getReceivingAddresses(svcWallet)
-      const write = (record: UsdcSwapRecord) => {
+      const assertLive = () => {
         if (satoraWipeCount() !== generation) throw new UsdcStoreWiped()
+      }
+      const write = (record: UsdcSwapRecord) => {
+        assertLive()
         saveUsdcSwap(record)
       }
       const pending = loadUsdcSwaps().filter((candidate) => swapPhase(candidate) === 'pending')
@@ -178,6 +243,7 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
           const { record: next, continued } = await advanceUsdcSwap(client, record, {
             persist: write,
             arkAddress: offchainAddr,
+            assertLive,
           })
           write(next)
           if (continued) write(continued)
@@ -191,23 +257,15 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
       }
     }
     const tick = async () => {
-      if (advancing.current) return
-      advancing.current = true
       try {
         // one tab drives at a time; the others pick the result up from storage
-        if (typeof navigator !== 'undefined' && navigator.locks) {
-          await navigator.locks.request(SWAP_DRIVER_LOCK, { ifAvailable: true }, (lock) => (lock ? drive() : undefined))
-        } else {
-          await drive()
-        }
-        if (!cancelled && getUsdcSession()) {
+        const ran = await runExclusive('skip', drive)
+        if (ran && !cancelled && getUsdcSession()) {
           setSwaps(loadUsdcSwaps())
           refresh()
         }
       } catch (err) {
         consoleError(err, 'failed to drive USDC swaps')
-      } finally {
-        advancing.current = false
       }
     }
     tick()
@@ -216,7 +274,7 @@ export const UsdcProvider = ({ children }: { children: ReactNode }) => {
       cancelled = true
       clearInterval(id)
     }
-  }, [session, available, hasPending, arkServerUrl, svcWallet, refresh])
+  }, [session, available, hasPending, arkServerUrl, svcWallet, refresh, runExclusive])
 
   return (
     <UsdcContext.Provider

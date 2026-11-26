@@ -297,6 +297,35 @@ export interface AdvanceOptions {
   persist: (record: UsdcSwapRecord) => void
   /** Where a refund goes when the record carries no address of its own. */
   arkAddress: string
+  /** Throws (e.g. {@link UsdcStoreWiped}) if a wallet reset invalidated this pass. */
+  assertLive?: () => void
+}
+
+/**
+ * Satora's claim and Arkade-refund methods resolve with `{ success: false }`
+ * instead of throwing when a step cannot run (not funded yet, locktime still
+ * active, missing local swap). Turn that into a thrown error so the caller
+ * never mistakes a rejected attempt for a succeeded one.
+ */
+const assertSdkOk = (result: { success?: boolean; message?: string } | undefined, fallback: string): void => {
+  if (result && result.success === false) throw new Error(result.message || fallback)
+}
+
+/**
+ * Reads Satora's latest state for a swap, updating Satora's local store when
+ * it still holds that swap. If the swap is absent from IndexedDB (evicted or
+ * deleted separately from localStorage), fall back to a read-only fetch so the
+ * record can still settle to its terminal state instead of wedging forever.
+ */
+const fetchSwap = async (client: Client, id: string): Promise<AnySwap> => {
+  try {
+    return await client.getSwap(id, { updateStorage: true })
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Swap not found:')) {
+      return client.getSwap(id, { updateStorage: false })
+    }
+    throw err
+  }
 }
 
 /**
@@ -309,12 +338,13 @@ export interface AdvanceOptions {
 const continueRefund = async (
   client: Client,
   record: UsdcSwapRecord,
-  { persist, arkAddress }: AdvanceOptions,
+  { persist, arkAddress, assertLive }: AdvanceOptions,
 ): Promise<{ record: UsdcSwapRecord; continued?: UsdcSwapRecord }> => {
   const since = record.continuationSince ?? Date.now()
   // the window opens the first time the refund is seen landed
   if (record.continuationSince === undefined) persist({ ...record, continuationSince: since })
   const info = await client.getRefundedEvmSwapContinuation(record.id)
+  assertLive?.()
   if (!info.eligible) {
     const gaveUp = Date.now() - since > CONTINUATION_WINDOW_MS
     return {
@@ -354,7 +384,7 @@ const continueRefund = async (
   }
   persist(done)
   // the new swap's own terms, not the ones the refunded swap was quoted at
-  const created = recordFromSwap(await client.getSwap(continuation.newSwapId, { updateStorage: true }), destination)
+  const created = recordFromSwap(await fetchSwap(client, continuation.newSwapId), destination)
   return { record: done, continued: created ? { ...created, funded: true } : undefined }
 }
 
@@ -390,8 +420,9 @@ export const advanceUsdcSwap = async (
   record: UsdcSwapRecord,
   options: AdvanceOptions,
 ): Promise<{ record: UsdcSwapRecord; continued?: UsdcSwapRecord }> => {
-  const { persist, arkAddress } = options
-  const swap = await client.getSwap(record.id, { updateStorage: true })
+  const { persist, arkAddress, assertLive } = options
+  const swap = await fetchSwap(client, record.id)
+  assertLive?.()
   let next: UsdcSwapRecord = { ...record, status: swap.status, updatedAt: Date.now(), error: undefined }
   // indexed before its terms were read: take them now
   if (record.provisional) {
@@ -417,9 +448,17 @@ export const advanceUsdcSwap = async (
   if (needsContinuation(next) && isRefundedStatus(next.status)) return continueRefund(client, next, options)
 
   if (needsClaim(next)) {
-    if (next.direction === 'toUsdc') await client.claim(next.id)
-    else await client.claimArkade(next.id, { destinationAddress: next.arkAddress || arkAddress })
-    const after = await client.getSwap(next.id, { updateStorage: true })
+    assertLive?.()
+    if (next.direction === 'toUsdc') {
+      assertSdkOk(await client.claim(next.id), 'USDC claim failed')
+    } else {
+      assertSdkOk(
+        await client.claimArkade(next.id, { destinationAddress: next.arkAddress || arkAddress }),
+        'Arkade claim failed',
+      )
+    }
+    assertLive?.()
+    const after = await fetchSwap(client, next.id)
     return { record: { ...next, status: after.status, updatedAt: Date.now() } }
   }
 
@@ -432,8 +471,13 @@ export const advanceUsdcSwap = async (
       persist(next)
     }
     if (next.direction === 'toUsdc') {
-      await client.refundSwap(next.id, { destinationAddress: next.arkAddress || arkAddress })
-      const after = await client.getSwap(next.id, { updateStorage: true })
+      assertLive?.()
+      assertSdkOk(
+        await client.refundSwap(next.id, { destinationAddress: next.arkAddress || arkAddress }),
+        'Arkade refund failed',
+      )
+      assertLive?.()
+      const after = await fetchSwap(client, next.id)
       return { record: { ...next, status: after.status, funded: true, updatedAt: Date.now() } }
     }
     // An EVM-sourced refund returns the HTLC's lock token, not USDC. The need
@@ -444,7 +488,8 @@ export const advanceUsdcSwap = async (
     next = { ...next, continuation: 'needed' }
     persist(next)
     await refundEvmSide(client, next.id, swap)
-    const after = await client.getSwap(next.id, { updateStorage: true })
+    assertLive?.()
+    const after = await fetchSwap(client, next.id)
     next = { ...next, status: after.status, funded: true, updatedAt: Date.now() }
     persist(next)
     return isRefundedStatus(next.status) ? continueRefund(client, next, options) : { record: next }

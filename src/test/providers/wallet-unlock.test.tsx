@@ -7,6 +7,8 @@ import { WalletContext, WalletProvider } from '../../providers/wallet'
 import { AspContext } from '../../providers/asp'
 import { ConfigContext } from '../../providers/config'
 import { setPrivateKey } from '../../lib/privateKey'
+import { setMnemonic } from '../../lib/mnemonic'
+import { clearUsdcSession, getUsdcSession } from '../../lib/usdc/keys'
 import { mockAspContextValue, mockConfigContextValue } from '../screens/mocks'
 
 const KEY = new Uint8Array(32).fill(1)
@@ -90,5 +92,35 @@ describe('unlocking', () => {
     })
 
     expect(wallet.unlockFailure).toBeNull()
+  })
+
+  it('never leaves the USD session in memory when unlock fails after the password is accepted', async () => {
+    const mnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+    clearUsdcSession()
+    vi.stubEnv('VITE_USDC_ENABLED', 'true')
+    await setMnemonic(mnemonic, 'right')
+    render(
+      <AspContext.Provider
+        value={{ ...mockAspContextValue, aspInfo: { ...mockAspContextValue.aspInfo, network: 'bitcoin' } }}
+      >
+        <ConfigContext.Provider value={mockConfigContextValue}>
+          <WalletProvider>
+            <Capture />
+          </WalletProvider>
+        </ConfigContext.Provider>
+      </AspContext.Provider>,
+    )
+
+    try {
+      await act(async () => {
+        await expect(wallet.unlockWallet('right')).rejects.toThrow()
+      })
+
+      expect(wallet.authState).toBe('locked')
+      expect(getUsdcSession()).toBeUndefined()
+    } finally {
+      clearUsdcSession()
+      vi.unstubAllEnvs()
+    }
   })
 })

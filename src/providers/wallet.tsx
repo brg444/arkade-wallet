@@ -1089,19 +1089,13 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         persisted: config.walletMode,
       })
       initialiseNostrBackup(deriveNostrKeyFromMnemonic(credentials.mnemonic, isMainnet(network)))
-      if (usdcAvailable(network, true)) {
-        try {
-          setUsdcSessionFromMnemonic(credentials.mnemonic)
-        } catch (err) {
-          consoleError(err, 'failed to derive the USDC account key')
-        }
-      }
       updateConfig({ ...config, pubkey, walletMode })
     } else if (credentials.privateKey) {
       identity = SingleKey.fromPrivateKey(credentials.privateKey)
       pubkey = hex.encode(secp256k1.getPublicKey(credentials.privateKey))
       walletMode = 'static'
       initialiseNostrBackup(credentials.privateKey)
+      clearUsdcSession()
       updateConfig({ ...config, pubkey, walletMode })
     } else {
       throw new Error('Either mnemonic or privateKey must be provided')
@@ -1115,6 +1109,15 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
       restoring: credentials.restoring,
     })
     if (!didInit) return
+    // Derive the USD session only once the wallet itself started, so a failed
+    // or aborted unlock never leaves EVM key material live while locked.
+    if (credentials.mnemonic && usdcAvailable(network, true)) {
+      try {
+        setUsdcSessionFromMnemonic(credentials.mnemonic)
+      } catch (err) {
+        consoleError(err, 'failed to derive the USDC account key')
+      }
+    }
     updateWallet({ ...wallet, network, pubkey })
     setInitialized(true)
   }
@@ -1135,6 +1138,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         await initWallet({ privateKey })
       }
     } catch (err) {
+      clearUsdcSession()
       setAuthState('locked')
       // The password was right and the wallet then failed to start. App has already left Unlock for
       // Home, so the Unlock screen that comes back must still be able to say why.
@@ -1196,6 +1200,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     abortInitSession()
     // Before anything awaits: a reload finishing while the worker is cleared must not draw this wallet.
     walletGeneration.current++
+    clearUsdcSession()
     if (!svcWallet) throw new Error('Service worker not initialized')
     if (statusPingInterval.current) clearInterval(statusPingInterval.current)
     statusPingInterval.current = undefined
@@ -1203,7 +1208,6 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     reloadTimerRef.current = undefined
     lnurlResyncRef.current?.cancel()
     removeServiceWorkerMessageHandler()
-    clearUsdcSession()
     await svcWallet.clear()
     setAuthState('locked')
     setInitialized(false)

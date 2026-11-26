@@ -7,8 +7,15 @@ import type { IWallet } from '@arkade-os/sdk'
 import { getReceivingAddresses, sendOffChain } from '../asp'
 import type { RouteQuote } from '../swapRoute'
 import type { UsdcSession } from './keys'
-import type { UsdcSwapQuote } from './satora'
-import { beginFunding, endFunding, type UsdcSwapDirection, type UsdcSwapRecord } from './swaps'
+import type { UsdcSwapQuote, ToUsdcSwap } from './satora'
+import {
+  beginCreatingSwap,
+  beginFunding,
+  endCreatingSwap,
+  endFunding,
+  type UsdcSwapDirection,
+  type UsdcSwapRecord,
+} from './swaps'
 
 const SATS_PER_BTC = 100_000_000
 const USDC_PER_USD = 1_000_000
@@ -154,27 +161,36 @@ export const executeSatoraSwap = async ({
   const client = await satora.satoraClient(session, arkServerUrl)
   const { offchainAddr } = await getReceivingAddresses(wallet)
 
-  const created =
-    direction === 'toUsdc'
-      ? await satora.createToUsdcSwap(client, session, quote.sourceAmount, offchainAddr)
-      : { record: await satora.createToArkadeSwap(client, session, quote.sourceAmount, offchainAddr) }
-  const terms = satora.createdTerms(created.record)
+  let created: ToUsdcSwap | { record: UsdcSwapRecord }
+  let record: UsdcSwapRecord
+  // Hold off unlock reconcile until the created swap is either deleted on
+  // moved terms or recorded in the wallet index, so it cannot be adopted mid-flight.
+  beginCreatingSwap()
   try {
-    assertSwapMatchesQuote(quote, terms)
-  } catch (err) {
-    // never funded: keep it out of Satora's store, or reconcile adopts it
-    await satora.forgetUnfundedSwap(client, created.record.id)
-    throw err
-  }
+    created =
+      direction === 'toUsdc'
+        ? await satora.createToUsdcSwap(client, session, quote.sourceAmount, offchainAddr)
+        : { record: await satora.createToArkadeSwap(client, session, quote.sourceAmount, offchainAddr) }
+    const terms = satora.createdTerms(created.record)
+    try {
+      assertSwapMatchesQuote(quote, terms)
+    } catch (err) {
+      // never funded: keep it out of Satora's store, or reconcile adopts it
+      await satora.forgetUnfundedSwap(client, created.record.id)
+      throw err
+    }
 
-  // never more than either the reviewed net figure or what Satora created
-  const record: UsdcSwapRecord = {
-    ...created.record,
-    targetAmount: bigMin(quote.targetAmount, terms.targetAmount).toString(),
-    fundingAttempted: true,
+    // never more than either the reviewed net figure or what Satora created
+    record = {
+      ...created.record,
+      targetAmount: bigMin(quote.targetAmount, terms.targetAmount).toString(),
+      fundingAttempted: true,
+    }
+    beginFunding(record.id)
+    recordSwap(record)
+  } finally {
+    endCreatingSwap()
   }
-  beginFunding(record.id)
-  recordSwap(record)
   try {
     if ('vhtlcAddress' in created) await sendOffChain(wallet, created.fundSats, created.vhtlcAddress)
     else await satora.fundToArkadeSwap(client, record.id)

@@ -112,6 +112,15 @@ export default function UsdcSend({ back }: { back: () => void }) {
       refresh()
       back()
     } catch (err) {
+      if (err instanceof Error && err.name === 'UsdcSendUncertain') {
+        // Already accepted by the bundler: leave Send and point at activity so
+        // a second tap cannot send the same transfer twice.
+        consoleError('cause' in err ? err.cause : err, 'USDC send did not confirm')
+        toast.error(t('usdc.sendUncertain'), { duration: 8000 })
+        refresh()
+        back()
+        return
+      }
       consoleError(err, 'USDC send failed')
       setError(t('usdc.sendFailed'))
     } finally {

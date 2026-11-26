@@ -2,8 +2,8 @@
 
 The wallet holds dollars as native Circle USDC on Arbitrum One. People see a single USD account: the
 chain and the token stay behind it, so another chain can later sit behind the same account without
-changing what anyone sees. The only place Arbitrum or USDC is named in the UI is the Receive screen, so
-nobody deposits from the wrong network.
+changing what anyone sees. Arbitrum and USDC only surface on Receive (so nobody deposits from the wrong
+network) and in the USD account breakdown when dollars sit on both Arkade and Arbitrum.
 
 ## How it works
 
@@ -48,19 +48,26 @@ The Satora and ZeroDev code paths load in their own chunk, only when the USD scr
   closes the review and points at the USD activity, and Confirm is never offered a second time for it.
 - **After funding.** A swap that only attempted funding is still refunded when it cannot complete, for a
   bounded number of tries spaced over more than a day, and Satora's own record of the funding transaction
-  counts even on a swap it has expired. A USD to Bitcoin swap is refunded with Satora's co-signature, and
-  once the HTLC's timelock has passed, by this key alone if Satora will not co-sign. Its refund is
-  Satora's lock token, so the swap stays pending until that token has been swapped on to Arkade: the need
-  is recorded before the refund goes out and retried for a day from when the refund lands. The
+  counts even on a swap it has expired. Claim and Arkade-refund results are checked for `{ success: false }`
+  so a rejected attempt never marks an unfunded swap funded. A USD to Bitcoin swap is refunded with Satora's
+  co-signature, and once the HTLC's timelock has passed, via a sponsored UserOp from this key if Satora will
+  not co-sign (using Satora's refund calldata checked client-side and Satora's default AA paymaster). Its
+  refund is Satora's lock token, so the swap stays pending until that token has been swapped on to Arkade:
+  the need is recorded before the refund goes out and retried for a day from when the refund lands. The
   continuation is indexed, with placeholder amounts until its terms are read, before the refunded swap is
-  closed. On every unlock, pending or not, the index is checked against Satora's own store (read natively,
-  so the Satora chunk only loads when there is a gap) and any swap it lacks is adopted. A swap created on
-  moved terms is deleted from Satora's store, since it was never funded.
+  closed. On every unlock, pending or not, the index is checked against Satora's own store (read natively
+  via `indexedDB.databases()`, so the Satora chunk only loads when there is a gap or the browser cannot list
+  databases) under the same swap-driver lock, deferring while a swap is being created, and any swap it lacks
+  is adopted without overwriting existing records. A swap created on moved terms is deleted from Satora's
+  store, since it was never funded.
 - **Sends.** Scanned codes are parsed as EIP-681: the payee comes from the `address` parameter of a USDC
   payment request, never the token contract, and a code naming another chain or token is refused. The
   USDC contract and the zero address are never accepted as recipients. A send is only offered once its
-  fee is quoted, fits the balance and fits the 1 USDC paymaster approval.
-- **One driver.** One tab drives swaps at a time (`navigator.locks`); the others follow through storage.
+  fee is quoted, fits the balance and fits the 1 USDC paymaster approval. If confirmation fails or times
+  out after the bundler has accepted the UserOperation, Send closes and points at USD activity instead of
+  offering a second Send tap.
+- **One driver.** One tab drives swaps and reconcile at a time (`navigator.locks`); the others follow
+  through storage.
 
 ## Configuration
 
@@ -79,7 +86,9 @@ The CSP sets no `connect-src`, so none of these origins needs a header change.
 
 ## Reset
 
-Locking drops the key and the Satora client built from the wallet root. A reset also empties Satora's
-stores through the client's own handles, deletes its IndexedDB (`lendaswap-v3`, the per-swap secrets),
-and drops the account's swap records with the rest of localStorage. A resume pass still awaiting Satora
-when the reset runs writes nothing back afterwards.
+Locking drops the key and the Satora client built from the wallet root; failed unlocks never retain a USD
+session, locking while the Satora chunk loads does not cache a client, and in-flight balance or history
+reads drop their results after lock or reset. A reset also empties Satora's stores through the client's own
+handles, deletes its IndexedDB (`lendaswap-v3`, the per-swap secrets), and drops the account's swap records
+with the rest of localStorage. A resume pass still awaiting Satora when the reset runs aborts before any
+irreversible step and writes nothing back afterwards.

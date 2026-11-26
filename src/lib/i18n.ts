@@ -981,6 +981,7 @@ export const translations = {
       sendFailed: 'The send did not go through, and the money is still in your account.',
       sendTitle: 'Send USD',
       sendUnavailable: 'USD sends are not enabled on this deployment yet.',
+      sendUncertain: 'This send was submitted and may still go through. Check your USD activity before trying again.',
       sending: 'Sending…',
       sent: 'Sent {amount}',
       swapComplete: 'Swapped',
@@ -2022,6 +2023,8 @@ export const translations = {
       sendFailed: 'El envío no se completó y el dinero sigue en tu cuenta.',
       sendTitle: 'Enviar USD',
       sendUnavailable: 'Los envíos en USD aún no están habilitados en esta instalación.',
+      sendUncertain:
+        'Este envío se envió y podría completarse aún. Revisa tu actividad en USD antes de intentarlo de nuevo.',
       sending: 'Enviando…',
       sent: 'Enviaste {amount}',
       swapComplete: 'Intercambiado',
@@ -3060,6 +3063,8 @@ export const translations = {
       sendFailed: 'O envio não foi concluído e o dinheiro continua na sua conta.',
       sendTitle: 'Enviar USD',
       sendUnavailable: 'Envios em USD ainda não estão habilitados nesta instalação.',
+      sendUncertain:
+        'Este envio foi submetido e ainda pode ser concluído. Verifique sua atividade em USD antes de tentar novamente.',
       sending: 'Enviando…',
       sent: 'Você enviou {amount}',
       swapComplete: 'Trocado',
