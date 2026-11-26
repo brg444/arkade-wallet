@@ -35,7 +35,7 @@ export default function Usdc() {
   // the merged row: every dollar the person holds, on whichever rail
   const row = rows.find((candidate) => candidate.assetId === USD_ACCOUNT_ID)
   const { t } = useTranslation()
-  // Receive from Home lands straight on the address, and Back returns Home
+  // Receive or Send from Home lands straight on that view, and Back returns Home
   const entry = useRef(usdcEntry).current
   const [view, setView] = useState<UsdcView>(entry ?? 'overview')
 

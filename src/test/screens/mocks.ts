@@ -154,7 +154,7 @@ export const mockFlowContextValue = {
   txInfo: mockTxInfo,
   swapInfo: undefined,
   swapFromAssetId: undefined,
-  usdcEntry: undefined as 'receive' | undefined,
+  usdcEntry: undefined as 'receive' | 'send' | undefined,
   initInfo: emptyInitInfo,
   noteInfo: emptyNoteInfo,
   recvInfo: emptyRecvInfo,

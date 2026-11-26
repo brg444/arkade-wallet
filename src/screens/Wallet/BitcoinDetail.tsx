@@ -32,13 +32,14 @@ import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { SwapsContext } from '../../providers/swaps'
 import { ConfigContext } from '../../providers/config'
 import { FiatContext } from '../../providers/fiat'
-import { FlowContext, emptyRecvInfo, emptySendInfo } from '../../providers/flow'
+import { FlowContext, emptyRecvInfo } from '../../providers/flow'
 import { NavigationContext, Pages } from '../../providers/navigation'
 import { buildConstantMarketSeries, buildCrossRatePoints, fetchHistoricalMarketData } from '../../lib/marketData'
-import { accountChartColorToken, normalizeAssetMinorUnits } from '../../lib/accountAssets'
+import { accountChartColorToken } from '../../lib/accountAssets'
 import { WalletContext } from '../../providers/wallet'
 import { useTranslation } from '../../providers/language'
 import { UsdcContext } from '../../providers/usdc'
+import { sendInfoForRow } from './accountSend'
 
 const CHART_WINDOWS = [
   { label: '1H', secs: 3_600 },
@@ -121,10 +122,6 @@ export default function BitcoinDetail({ assetId = 'btc' }: { assetId?: string })
           minimumFractionDigits: marketDecimals,
         })
   const rawBalance = typeof row.balance === 'bigint' ? row.balance : BigInt(Math.max(0, Math.floor(row.balance)))
-  const rawSpendableBalance =
-    typeof row.spendableBalance === 'bigint'
-      ? row.spendableBalance
-      : BigInt(Math.max(0, Math.floor(row.spendableBalance)))
   const formattedBalance = isBitcoin
     ? prettyBitcoinAmount(safeBitcoinBalance, bitcoinUnit)
     : `${prettyCurrencyAssetAmount(rawBalance, row.decimals, row.ticker, true)} ${row.ticker}`
@@ -144,23 +141,9 @@ export default function BitcoinDetail({ assetId = 'btc' }: { assetId?: string })
     marketChart.status === 'ready' && marketChart.data.length >= 2 && typeof ResizeObserver !== 'undefined'
   const accountTicker = accountTickerForAssetTicker(row.ticker)
   const sourceAssetId = row.sourceAsset?.assetId ?? (!isBitcoin ? row.assetId : undefined)
-  const sendAccount =
-    !isBitcoin && accountTicker && accountTicker !== 'BTC' && row.sourceAsset
-      ? {
-          assetId: row.assetId,
-          ticker: accountTicker,
-          // the composer caps at this, so it is the spendable amount normalized
-          // to account minor units; the header above keeps the full-precision total
-          balance: normalizeAssetMinorUnits(
-            rawSpendableBalance,
-            row.decimals,
-            fiatDecimalsFor(accountTicker as Currencies),
-          ),
-          decimals: fiatDecimalsFor(accountTicker as Currencies),
-          amount: BigInt(0),
-          source: row.sourceAsset,
-        }
-      : undefined
+  // the same send Home's account picker opens for this account
+  const sendInfo = sendInfoForRow(row)
+  const sendAccount = sendInfo.account
   const tokenLogoTicker = tokenLogoTickerForTicker(accountTicker ?? row.ticker)
   const activityAssetFilter = isBitcoin ? 'btc' : row.assetId
   const hasAssetSwaps = txs.some(
@@ -185,13 +168,7 @@ export default function BitcoinDetail({ assetId = 'btc' }: { assetId?: string })
 
   const handleSend = () => {
     hapticLight()
-    setSendInfo(
-      sendAccount
-        ? { ...emptySendInfo, account: sendAccount }
-        : isBitcoin || !sourceAssetId
-          ? emptySendInfo
-          : { ...emptySendInfo, assets: [{ assetId: sourceAssetId, amount: BigInt(0) }] },
-    )
+    setSendInfo(sendInfo)
     navigate(Pages.SendForm)
   }
 
