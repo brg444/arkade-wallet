@@ -51,6 +51,13 @@ if (KERNEL_7702_DELEGATION_ADDRESS.toLowerCase() !== KERNEL_V3_3_DELEGATE.toLowe
 /** Circle Paymaster v0.7 operational surcharge on Arbitrum One (10%). */
 const CIRCLE_PAYMASTER_SURCHARGE_NUM = BigInt(110)
 const CIRCLE_PAYMASTER_SURCHARGE_DEN = BigInt(100)
+/**
+ * Headroom added on top of Circle Paymaster's `additionalGasCharge` (35,000)
+ * for `paymasterPostOpGasLimit`. Circle reverts in `_validatePaymasterUserOp`
+ * (`0x5ff4afc1`) whenever `paymasterPostOpGasLimit < additionalGasCharge`,
+ * while bundler simulations often estimate raw `_postOp` gas below 35,000.
+ */
+const CIRCLE_POST_OP_GAS_BUFFER = BigInt(15_000)
 const ETH_DECIMALS = 18
 
 const CIRCLE_PAYMASTER_ABI = parseAbi([
@@ -212,12 +219,25 @@ const buildClients = async (session: UsdcSession) => {
       },
     },
     paymaster: {
-      // Omit gas-limit overrides so `prepareUserOperation` keeps the bundler's
-      // live `paymasterVerificationGasLimit` and `paymasterPostOpGasLimit` estimates.
-      getPaymasterData: async () => ({
-        paymaster: CIRCLE_PAYMASTER_V07 as `0x${string}`,
-        paymasterData: await signCirclePaymasterData(),
-      }),
+      // Omit `paymasterVerificationGasLimit` so `prepareUserOperation` keeps
+      // the bundler's live estimate (~422k gas for ERC-1271 permit + oracle),
+      // while setting `paymasterPostOpGasLimit` above `additionalGasCharge` so
+      // Circle Paymaster's minimum-postOp check never reverts on submission.
+      getPaymasterData: async () => {
+        const [paymasterData, additionalGasCharge] = await Promise.all([
+          signCirclePaymasterData(),
+          publicClient.readContract({
+            address: CIRCLE_PAYMASTER_V07 as `0x${string}`,
+            abi: CIRCLE_PAYMASTER_ABI,
+            functionName: 'additionalGasCharge',
+          }),
+        ])
+        return {
+          paymaster: CIRCLE_PAYMASTER_V07 as `0x${string}`,
+          paymasterData,
+          paymasterPostOpGasLimit: additionalGasCharge + CIRCLE_POST_OP_GAS_BUFFER,
+        }
+      },
     },
   })
   return { account, kernelClient, publicClient }

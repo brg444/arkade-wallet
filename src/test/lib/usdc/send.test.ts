@@ -11,7 +11,16 @@ const mocks = vi.hoisted(() => ({
   signTypedData: vi.fn(),
   encodeCalls: vi.fn(),
   lastClientConfig: undefined as
-    | { paymaster?: { getPaymasterData?: () => Promise<{ paymaster: string; paymasterData: string }> } }
+    | {
+        paymaster?: {
+          getPaymasterData?: () => Promise<{
+            paymaster: string
+            paymasterData: string
+            paymasterPostOpGasLimit?: bigint
+            paymasterVerificationGasLimit?: bigint
+          }>
+        }
+      }
     | undefined,
 }))
 
@@ -103,10 +112,13 @@ describe('USDC gasless sends (Circle Paymaster v0.7)', () => {
     const fee = await estimateUsdcSendFee(session, recipient, BigInt(1_000_000))
     expect(fee).toBe(BigInt(42_636))
 
-    // Verify paymaster callback packs Circle Paymaster v0.7 permit with live nonce and 66-byte ERC-1271 sig
+    // Verify paymaster callback packs Circle Paymaster v0.7 permit with live nonce, 66-byte ERC-1271 sig,
+    // postOp floor above `additionalGasCharge` (35k), and leaves verification gas to bundler estimation
     const pm = await mocks.lastClientConfig?.paymaster?.getPaymasterData?.()
     expect(pm?.paymaster).toBe(CIRCLE_PAYMASTER_V07)
     expect(pm?.paymasterData.toLowerCase()).toContain(USDC_ARBITRUM_ADDRESS.slice(2).toLowerCase())
+    expect(pm?.paymasterPostOpGasLimit).toBe(BigInt(50_000))
+    expect(pm?.paymasterVerificationGasLimit).toBeUndefined()
     expect(mocks.signTypedData).toHaveBeenCalledWith(
       expect.objectContaining({
         primaryType: 'Permit',
