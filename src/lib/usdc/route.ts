@@ -6,24 +6,12 @@
 import type { IWallet } from '@arkade-os/sdk'
 import { getReceivingAddresses, sendOffChain } from '../asp'
 import type { RouteQuote } from '../swapRoute'
-import { USD_ACCOUNT_ID } from './config'
 import type { UsdcSession } from './keys'
 import type { UsdcSwapQuote } from './satora'
 import type { UsdcSwapDirection, UsdcSwapRecord } from './swaps'
 
 const SATS_PER_BTC = 100_000_000
 const USDC_PER_USD = 1_000_000
-
-/** The Satora direction a pair maps to, or undefined when an Arkade market fills it. */
-export const satoraDirectionFor = (
-  fromAssetId: string,
-  toAssetId: string | undefined,
-  btcAssetId: string,
-): UsdcSwapDirection | undefined => {
-  if (fromAssetId === btcAssetId && toAssetId === USD_ACCOUNT_ID) return 'toUsdc'
-  if (fromAssetId === USD_ACCOUNT_ID && toAssetId === btcAssetId) return 'toArkade'
-  return undefined
-}
 
 /**
  * The composer hands quotes a give amount in whole units: whole BTC for

@@ -5,7 +5,10 @@ import Header from '../../../components/Header'
 import Padded from '../../../components/Padded'
 import { PrivacyAmount } from '../../../components/PrivacyAmount'
 import TokenLogo from '../../../components/TokenLogo'
-import { useUsdcFiatText } from '../../../hooks/useUsdcFiatText'
+import { usePortfolioFiat, type PortfolioSource } from '../../../hooks/usePortfolioFiat'
+import { prettyFiatAmount } from '../../../lib/format'
+import { ConfigContext } from '../../../providers/config'
+import { FiatContext } from '../../../providers/fiat'
 import Glyph from '../../../icons/Glyph'
 import { hapticLight } from '../../../lib/haptics'
 import { formatUsd } from '../../../lib/usdc/amount'
@@ -24,9 +27,13 @@ export type UsdcView = 'overview' | 'receive' | 'send'
 
 export default function Usdc() {
   const { session, balance, refresh } = useContext(UsdcContext)
-  const { setSwapFromAssetId } = useContext(FlowContext)
+  const { config } = useContext(ConfigContext)
+  const { fiatDecimals } = useContext(FiatContext)
+  const { setAssetInfo, setSwapFromAssetId } = useContext(FlowContext)
   const { navigate } = useContext(NavigationContext)
-  const fiatText = useUsdcFiatText()
+  const { rows } = usePortfolioFiat()
+  // the merged row: every dollar the person holds, on whichever rail
+  const row = rows.find((candidate) => candidate.assetId === USD_ACCOUNT_ID)
   const { t } = useTranslation()
   const [view, setView] = useState<UsdcView>('overview')
 
@@ -55,9 +62,26 @@ export default function Usdc() {
   if (view === 'receive') return <UsdcReceive address={session.address} back={back} />
   if (view === 'send') return <UsdcSend back={back} />
 
+  // sends go out from the account's own USDC; dollars held on Arkade send
+  // from their own screen, one tap away in the breakdown
   const units = balance ?? BigInt(0)
-  const formattedBalance = formatUsd(units)
-  const value = balance === undefined ? undefined : fiatText(balance)
+  const total = typeof row?.balance === 'bigint' ? row.balance : units
+  const formattedBalance = formatUsd(total)
+  const decimals = fiatDecimals()
+  const fiatText = (amount: number) =>
+    prettyFiatAmount(amount, config.currency, {
+      bitcoinUnit: config.unit,
+      maximumFractionDigits: decimals,
+      minimumFractionDigits: decimals,
+    })
+  const value = row?.hasFiatPrice ? fiatText(row.fiatAmount) : undefined
+  const sources = row?.sources ?? []
+  const openSource = (source: PortfolioSource) => {
+    if (source.rail !== 'arkade' || !source.assetId) return
+    hapticLight()
+    setAssetInfo({ assetId: source.assetId, supply: BigInt(0) })
+    navigate(Pages.AccountDetail)
+  }
 
   return (
     <>
@@ -126,6 +150,8 @@ export default function Usdc() {
               </div>
             </section>
 
+            {sources.length > 1 ? <UsdBreakdown sources={sources} total={total} onOpen={openSource} /> : null}
+
             <section className='asset-detail-activity'>
               <div className='asset-detail-section-header'>
                 <strong>{t('usdc.activity')}</strong>
@@ -136,5 +162,90 @@ export default function Usdc() {
         </Padded>
       </Content>
     </>
+  )
+}
+
+const RAIL_COLOR: Record<PortfolioSource['rail'], string> = {
+  arkade: 'var(--brand)',
+  arbitrum: 'var(--purple-200)',
+}
+
+/**
+ * Where the USD balance sits, when it sits in more than one place. The bar and
+ * the rows share one order and one colour per rail; a rail held on Arkade
+ * opens its own account screen, where it sends, receives and swaps natively.
+ */
+function UsdBreakdown({
+  sources,
+  total,
+  onOpen,
+}: {
+  sources: PortfolioSource[]
+  total: bigint
+  onOpen: (source: PortfolioSource) => void
+}) {
+  const { t } = useTranslation()
+  const share = (balance: bigint) => (total > BigInt(0) ? Number((balance * BigInt(10_000)) / total) / 100 : 0)
+  const label = (source: PortfolioSource) => (source.rail === 'arkade' ? t('usdc.railArkade') : t('usdc.railArbitrum'))
+
+  return (
+    <section className='asset-detail-activity' aria-label={t('usdc.breakdown')}>
+      <div className='asset-detail-section-header'>
+        <strong>{t('usdc.breakdown')}</strong>
+      </div>
+      <div className='flex h-2 w-full overflow-hidden rounded-full' aria-hidden='true'>
+        {sources.map((source) => (
+          <span
+            key={`${source.rail}-${source.assetId ?? ''}`}
+            style={{ width: `${share(source.balance)}%`, background: RAIL_COLOR[source.rail] }}
+          />
+        ))}
+      </div>
+      <div className='activity-list activity-list--compact'>
+        {sources.map((source, index) => {
+          const content = (
+            <>
+              <div className='activity-row__left'>
+                <span
+                  className='inline-block size-2.5 shrink-0 rounded-full'
+                  style={{ background: RAIL_COLOR[source.rail] }}
+                  aria-hidden='true'
+                />
+                <div className='activity-row__copy'>
+                  <span className='activity-row__kind'>{label(source)}</span>
+                  <span className='activity-row__meta'>{`${Math.round(share(source.balance))}%`}</span>
+                </div>
+              </div>
+              <div className='activity-row__right'>
+                <span className='activity-row__amount'>
+                  <PrivacyAmount masked='•••• USD'>{formatUsd(source.balance)}</PrivacyAmount>
+                </span>
+              </div>
+            </>
+          )
+          const className = `activity-row activity-row--static${index === 0 ? ' activity-row--first' : ''}`
+          return source.rail === 'arkade' ? (
+            <div
+              key={`${source.rail}-${source.assetId ?? ''}`}
+              role='button'
+              tabIndex={0}
+              className={className}
+              onClick={() => onOpen(source)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                onOpen(source)
+              }}
+            >
+              {content}
+            </div>
+          ) : (
+            <div key={source.rail} className={className}>
+              {content}
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }

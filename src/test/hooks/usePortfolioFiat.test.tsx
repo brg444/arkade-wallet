@@ -7,6 +7,8 @@ import { usePortfolioFiat } from '../../hooks/usePortfolioFiat'
 import { AspContext } from '../../providers/asp'
 import { FiatContext } from '../../providers/fiat'
 import { WalletContext } from '../../providers/wallet'
+import { UsdcContext } from '../../providers/usdc'
+import { USD_ACCOUNT_ID } from '../../lib/usdc/config'
 import { mockAspContextValue, mockFiatContextValue, mockWalletContextValue } from '../screens/mocks'
 
 const assetDetails = (assetId: string, ticker: string, decimals = 2) => ({
@@ -258,5 +260,28 @@ describe('usePortfolioFiat', () => {
     expect(chfRow?.hasFiatPrice).toBe(false)
     expect(result.current.totalFiat).toBe(1000)
     expect(result.current.totalSats).toBe(1000)
+  })
+
+  it('folds every dollar into one USD account row, with a breakdown, counting each once', () => {
+    const usdc = { available: true, balance: BigInt(5_000_000) }
+    const { result } = renderHook(() => usePortfolioFiat(), {
+      wrapper: ({ children }) =>
+        wrapper({
+          children: <UsdcContext.Provider value={usdc as any}>{children}</UsdcContext.Provider>,
+          depixAmount: BigInt(420000),
+        }),
+    })
+    const usdt = result.current.rows.find((entry) => entry.assetId === MUTINYNET_USDT_ASSET_ID)
+    const usd = result.current.rows.find((entry) => entry.assetId === USD_ACCOUNT_ID)
+    // the Arkade dollar stays for its own screen but Home lists only the account
+    expect(usdt?.mergedInto).toBe(USD_ACCOUNT_ID)
+    // 12.34 USD on Arkade (2 decimals) + 5 USDC, in USDC base units
+    expect(usd).toMatchObject({ balance: BigInt(17_340_000), fiatCurrency: Currencies.USD })
+    expect(usd?.sources).toEqual([
+      { rail: 'arkade', assetId: MUTINYNET_USDT_ASSET_ID, balance: BigInt(12_340_000), fiatAmount: usdt?.fiatAmount },
+      { rail: 'arbitrum', balance: BigInt(5_000_000), fiatAmount: 5_000 },
+    ])
+    // only the USDC is new to the total: the Arkade dollars were already in it
+    expect(result.current.totalSats).toBeCloseTo(12840.84 + 5_000)
   })
 })

@@ -23,12 +23,17 @@ nobody deposits from the wrong network.
   delegation Satora also signs for), and each send is one UserOperation through ZeroDev's ERC-20 paymaster
   that approves at most 1 USDC for gas and makes the transfer. Gas is paid in USDC, so there is never any
   ETH to hold (`src/lib/usdc/send.ts`).
+- **One USD.** A USD-designated asset on Arkade folds into the same account: Home shows one USD row with
+  the combined balance, and the account screen breaks it down by where it sits (Arkade, Arbitrum). The
+  Arkade share opens its own account screen, where it sends, receives and swaps natively.
 - **Swap screen.** USD is an asset in the one Swap screen, next to the Arkade markets. Each pair picks its
   rail (`src/lib/swapRoute.ts`): Bitcoin and USD go through Satora (`src/lib/usdc/route.ts`,
   `useSatoraQuote`), everything else through an Arkade intent market (`useOfferQuote`). Both rails produce
   the same `RouteQuote`, so the composer, review and confirmation are shared, and only quoting and
-  execution differ underneath. While the USD account exists it is the only USD offered: any other
-  USD-designated asset is left out of the pickers.
+  execution differ underneath (`resolveSwapRoute`). The pickers show one USD. Selling USD spends Arkade
+  dollars through their market when they cover the amount, and otherwise the USDC through Satora; buying
+  USD with Bitcoin lands as USDC, Arbitrum being the default chain. A swap never splits across the two,
+  so Max is the larger of the two balances.
 
 The Satora and ZeroDev code paths load in their own chunk, only when the USD screens need them.
 

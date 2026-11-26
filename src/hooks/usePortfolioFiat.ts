@@ -5,7 +5,7 @@ import { Currencies } from '../lib/types'
 import { AspContext } from '../providers/asp'
 import { FiatContext } from '../providers/fiat'
 import { WalletContext } from '../providers/wallet'
-import { designatedAccountCurrency, type FiatAccountSourceAsset } from '../lib/accountAssets'
+import { designatedAccountCurrency, normalizeAssetMinorUnits, type FiatAccountSourceAsset } from '../lib/accountAssets'
 import { USD_ACCOUNT_ID, USDC_DECIMALS } from '../lib/usdc/config'
 import { usdcToNumber } from '../lib/usdc/amount'
 import { UsdcContext } from '../providers/usdc'
@@ -35,6 +35,22 @@ export interface PortfolioRow {
   fiatCurrency?: Currencies
   /** Backing wallet asset used internally to fulfill account actions. */
   sourceAsset?: FiatAccountSourceAsset
+  /** Set on a row whose balance is shown inside another row (the USD
+   * account): it stays here for its own detail screen and the swap screen,
+   * but Home lists only the row it was merged into. */
+  mergedInto?: string
+  /** For a row that merges several holdings: where the balance sits. */
+  sources?: PortfolioSource[]
+}
+
+export interface PortfolioSource {
+  /** `arkade`: an asset on Arkade (its id in `assetId`). `arbitrum`: the
+   * USD account's USDC. */
+  rail: 'arkade' | 'arbitrum'
+  assetId?: string
+  /** In the merged row's minor units. */
+  balance: bigint
+  fiatAmount: number
 }
 
 export interface PortfolioFiat {
@@ -125,23 +141,42 @@ export function usePortfolioFiat(): PortfolioFiat {
     })
   }
 
-  // The USD account: one row for the person, held as USDC off Arkade (see
-  // lib/usdc). It counts toward the total like any other currency account.
+  // The USD account: one row for every dollar the person holds, wherever it
+  // sits. Its own USDC counts toward the total here; a USD-designated asset on
+  // Arkade was counted above, so it is folded into the row's balance and
+  // breakdown and marked merged rather than counted twice.
   if (usdc.available) {
     const units = usdc.balance ?? BigInt(0)
     const satsEquivalent = reportingSatsForFiatAmount(usdcToNumber(units), Currencies.USD, toFiatAmount)
     totalSats += satsEquivalent
+    const sources: PortfolioSource[] = []
+    let balance = BigInt(0)
+    let spendableBalance = BigInt(0)
+    let fiatAmount = 0
+    let rowSats = 0
+    for (const row of rows) {
+      if (row.fiatCurrency !== Currencies.USD) continue
+      row.mergedInto = USD_ACCOUNT_ID
+      const owned = normalizeAssetMinorUnits(row.balance, row.decimals, USDC_DECIMALS)
+      balance += owned
+      spendableBalance += normalizeAssetMinorUnits(row.spendableBalance, row.decimals, USDC_DECIMALS)
+      fiatAmount += row.fiatAmount
+      rowSats += row.satsEquivalent
+      sources.push({ rail: 'arkade', assetId: row.assetId, balance: owned, fiatAmount: row.fiatAmount })
+    }
+    sources.push({ rail: 'arbitrum', balance: units, fiatAmount: toFiat(satsEquivalent) })
     rows.push({
       assetId: USD_ACCOUNT_ID,
       name: Currencies.USD,
       ticker: Currencies.USD,
       decimals: USDC_DECIMALS,
-      balance: units,
-      spendableBalance: units,
-      fiatAmount: toFiat(satsEquivalent),
-      satsEquivalent,
-      hasFiatPrice: usdc.balance !== undefined,
+      balance: balance + units,
+      spendableBalance: spendableBalance + units,
+      fiatAmount: fiatAmount + toFiat(satsEquivalent),
+      satsEquivalent: rowSats + satsEquivalent,
+      hasFiatPrice: usdc.balance !== undefined || sources.length > 1,
       fiatCurrency: Currencies.USD,
+      sources,
     })
   }
 

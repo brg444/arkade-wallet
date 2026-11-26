@@ -1,18 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { USD_ACCOUNT_ID } from '../../../lib/usdc/config'
-import { routeQuoteFromSatora, satoraDirectionFor, satoraGiveLimit, satoraSourceUnits } from '../../../lib/usdc/route'
-
-const BTC = 'btc-asset'
+import { routeQuoteFromSatora, satoraGiveLimit, satoraSourceUnits } from '../../../lib/usdc/route'
 
 describe('Satora swap rail', () => {
-  it('claims only the Bitcoin and USD pairs, leaving the rest to Arkade markets', () => {
-    expect(satoraDirectionFor(BTC, USD_ACCOUNT_ID, BTC)).toBe('toUsdc')
-    expect(satoraDirectionFor(USD_ACCOUNT_ID, BTC, BTC)).toBe('toArkade')
-    expect(satoraDirectionFor(BTC, 'some-arkade-asset', BTC)).toBeUndefined()
-    expect(satoraDirectionFor(USD_ACCOUNT_ID, 'some-arkade-asset', BTC)).toBeUndefined()
-    expect(satoraDirectionFor(BTC, undefined, BTC)).toBeUndefined()
-  })
-
   it('turns the composer give amount into sats or USDC base units', () => {
     expect(satoraSourceUnits('toUsdc', '0.001')).toBe(BigInt(100_000))
     expect(satoraSourceUnits('toUsdc', '1')).toBe(BigInt(100_000_000))

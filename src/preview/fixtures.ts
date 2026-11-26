@@ -83,7 +83,7 @@ const longHistory = (count: number) =>
     historyKey: `history-${i}`,
   }))
 
-// `?state=usd`: the USD account (lib/usdc) in place of the Arkade USDT one.
+// `?state=usd`: the USD account (lib/usdc), holding USDC beside the Arkade USDT it folds in.
 const USD_ADDRESS = '0x9858EfFD232B4033E47d90003D41EC34EcaEda94'
 const usdcFixture = (enabled: boolean) => {
   const now = Date.now()
@@ -217,8 +217,8 @@ export function buildFixtures(theme: Themes, variant: string) {
       txs: empty ? [] : history,
       ungroupedTxs: empty ? [] : history,
       isVerifiedAsset: (assetId: string) => assetId === MUTINYNET_USDT_ASSET_ID,
-      assetBalances: empty || usd ? [] : [{ assetId: MUTINYNET_USDT_ASSET_ID, amount: BigInt(17_000) }],
-      availableAssetBalances: empty || usd ? [] : [{ assetId: MUTINYNET_USDT_ASSET_ID, amount: BigInt(17_000) }],
+      assetBalances: empty ? [] : [{ assetId: MUTINYNET_USDT_ASSET_ID, amount: BigInt(17_000) }],
+      availableAssetBalances: empty ? [] : [{ assetId: MUTINYNET_USDT_ASSET_ID, amount: BigInt(17_000) }],
       assetMetadataCache: new Map([
         [MUTINYNET_USDT_ASSET_ID, { metadata: { decimals: 2, name: 'Tether USD', ticker: 'USDT' } }],
       ]),

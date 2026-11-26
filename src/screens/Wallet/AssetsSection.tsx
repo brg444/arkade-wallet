@@ -30,7 +30,8 @@ export default function AssetsSection() {
   // unverified assets are spoofable, so they never show on home at all —
   // they stay manageable in the Arkade Mint app
   const accountRows = rows.filter(
-    (row) => row.assetId === 'btc' || row.assetId === USD_ACCOUNT_ID || isVerifiedAsset(row.assetId),
+    (row) =>
+      !row.mergedInto && (row.assetId === 'btc' || row.assetId === USD_ACCOUNT_ID || isVerifiedAsset(row.assetId)),
   )
 
   const fiatLabel = (amount: number) => {
