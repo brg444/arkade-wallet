@@ -80,7 +80,7 @@ describe('Circle CCTP V2 multi-chain sends', () => {
   })
 
   it('quotes live IRIS fees for cross-chain sends and caches per destination domain', async () => {
-    const fetchMock = vi.fn(async () => {
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => {
       return new Response(
         JSON.stringify([
           { finalityThreshold: 2000, minimumFee: 0, forwardFee: { low: 100_000, med: 120_000, high: 150_000 } },
