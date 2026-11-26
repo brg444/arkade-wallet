@@ -11,6 +11,7 @@ import { AspContext } from '../../providers/asp'
 import { ConfigContext } from '../../providers/config'
 import { FiatContext } from '../../providers/fiat'
 import { NavigationContext, Pages } from '../../providers/navigation'
+import { WalletContext } from '../../providers/wallet'
 import { useTranslation } from '../../providers/language'
 
 const ROTATE_MS = 3_500
@@ -27,6 +28,9 @@ export default function PredictSection() {
   const { config } = useContext(ConfigContext)
   const { fromFiat, toFiat } = useContext(FiatContext)
   const { navigate } = useContext(NavigationContext)
+  const { booting, dataReady } = useContext(WalletContext)
+  // Predict needs a loaded wallet to quote and fund, so it waits out the first load like the other actions.
+  const homeBusy = Boolean(booting) && !dataReady
   const { t } = useTranslation()
   const reduceMotion = useReducedMotion()
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
@@ -90,6 +94,7 @@ export default function PredictSection() {
   }, [market, next, config.currency, toFiat, fromFiat])
 
   const open = () => {
+    if (homeBusy) return
     hapticLight()
     navigate(Pages.Predict)
   }
@@ -115,12 +120,18 @@ export default function PredictSection() {
   return (
     <section className='home-section'>
       <div className='home-section__header'>
-        <button type='button' className='predict-home__heading' onClick={open}>
+        <button type='button' className='predict-home__heading' onClick={open} disabled={homeBusy}>
           <h2 className='home-section-label'>{t('predict.homeTitle')}</h2>
           <Glyph name='chevronRight' size={18} strokeWidth={2} />
         </button>
       </div>
-      <button type='button' className='predict-home focusable' onClick={open} data-testid='home-action-predict'>
+      <button
+        type='button'
+        className='predict-home focusable'
+        onClick={open}
+        disabled={homeBusy}
+        data-testid='home-action-predict'
+      >
         <span className='predict-home__coin' aria-hidden='true'>
           ₿
         </span>

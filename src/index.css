@@ -5433,6 +5433,12 @@ button.predict-field:active {
   -webkit-tap-highlight-color: transparent;
 }
 
+.predict-home:disabled,
+.predict-home__heading:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .predict-home:active {
   opacity: 0.7;
 }

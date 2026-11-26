@@ -6,6 +6,7 @@ import { SettingsOptions } from '../../lib/types'
 import { FlowContext, emptySendInfo } from '../../providers/flow'
 import { NavigationContext, Pages } from '../../providers/navigation'
 import { OptionsContext } from '../../providers/options'
+import { WalletContext } from '../../providers/wallet'
 import { useTranslation } from '../../providers/language'
 import '../Settings/Contacts.css'
 
@@ -17,15 +18,19 @@ export default function ContactsSection({ contacts }: { contacts: Contact[] }) {
   const { setSendInfo } = useContext(FlowContext)
   const { navigate } = useContext(NavigationContext)
   const { setOption } = useContext(OptionsContext)
+  const { booting, dataReady } = useContext(WalletContext)
+  const homeBusy = Boolean(booting) && !dataReady
   const { t } = useTranslation()
 
   const pay = (contact: Contact) => {
+    if (homeBusy) return
     hapticLight()
     setSendInfo({ ...emptySendInfo, recipient: contact.address })
     navigate(Pages.SendForm)
   }
 
   const viewAll = () => {
+    if (homeBusy) return
     hapticLight()
     setOption(SettingsOptions.Contacts)
     navigate(Pages.Settings)
@@ -40,6 +45,7 @@ export default function ContactsSection({ contacts }: { contacts: Contact[] }) {
         <button
           type='button'
           onClick={viewAll}
+          disabled={homeBusy}
           aria-describedby='home-contacts-title'
           data-testid='contacts-view-all'
           className='home-section-action home-section-action--quiet'
@@ -58,6 +64,7 @@ export default function ContactsSection({ contacts }: { contacts: Contact[] }) {
                 className='home-contact'
                 aria-label={t('contacts.sendToName', { name: label })}
                 onClick={() => pay(contact)}
+                disabled={homeBusy}
               >
                 <span className='contact-avatar' aria-hidden='true'>
                   {initialFor(label)}
