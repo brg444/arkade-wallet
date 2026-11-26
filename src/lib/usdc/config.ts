@@ -23,7 +23,6 @@ export const KERNEL_V3_3_DELEGATE = '0xd6CEDDe84be40893d153Be9d467CD6aD37875b28'
 export const PAYMASTER_ALLOWANCE = BigInt(1_000_000) // 1 USDC
 
 const DEFAULT_ARBITRUM_RPC_URL = 'https://arb1.arbitrum.io/rpc'
-const DEFAULT_HISTORY_URL = 'https://arbitrum.blockscout.com/api/v2'
 const DEFAULT_EXPLORER_URL = 'https://arbiscan.io'
 
 export interface UsdcConfig {
@@ -31,7 +30,8 @@ export interface UsdcConfig {
   /** ZeroDev v3 project RPC: bundler and paymaster share it. */
   zerodevRpcUrl?: string
   satoraApiUrl?: string
-  historyUrl: string
+  /** Optional Blockscout v2 compatible indexer; when unset, transfers read from the RPC. */
+  historyUrl?: string
   historyApiKey?: string
   explorerUrl: string
 }
@@ -42,7 +42,7 @@ export const usdcConfig = (): UsdcConfig => {
     rpcUrl: fromRuntimeEnv(import.meta.env.VITE_ARBITRUM_RPC_URL) ?? DEFAULT_ARBITRUM_RPC_URL,
     zerodevRpcUrl: projectId ? `https://rpc.zerodev.app/api/v3/${projectId}/chain/${ARBITRUM_CHAIN_ID}` : undefined,
     satoraApiUrl: fromRuntimeEnv(import.meta.env.VITE_SATORA_API_URL),
-    historyUrl: fromRuntimeEnv(import.meta.env.VITE_USDC_HISTORY_URL) ?? DEFAULT_HISTORY_URL,
+    historyUrl: fromRuntimeEnv(import.meta.env.VITE_USDC_HISTORY_URL),
     historyApiKey: fromRuntimeEnv(import.meta.env.VITE_USDC_HISTORY_API_KEY),
     explorerUrl: DEFAULT_EXPLORER_URL,
   }

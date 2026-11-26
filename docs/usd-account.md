@@ -12,8 +12,10 @@ network) and in the USD account breakdown when dollars sit on both Arkade and Ar
   backup restores both, and any BIP-44 wallet can recover the account from the phrase. The key lives in
   memory only, set on unlock and wiped on lock and reset (`src/lib/usdc/keys.ts`). Wallets restored from
   an nsec have no BIP-32 root, so they get no USD account.
-- **Balance and history.** A single `eth_call` to `balanceOf` (`src/lib/usdc/chain.ts`), and a Blockscout
-  v2 compatible indexer for the transfer list. The balance never depends on the indexer.
+- **Balance and history.** A single `eth_call` to `balanceOf` (`src/lib/usdc/chain.ts`), and recent USDC
+  `Transfer` logs read from the Arbitrum RPC (or an optional Blockscout v2 compatible indexer when
+  `VITE_USDC_HISTORY_URL` is configured, falling back to RPC logs on error). The balance never depends on
+  history.
 - **Swaps with Arkade.** Satora (`@lendasat/lendaswap-sdk-pure`) in both directions, gasless on each side
   (`src/lib/usdc/satora.ts`). Bitcoin to USD: the wallet funds Satora's VHTLC on Arkade and claims gasless
   into the account. USD to Bitcoin: a Permit2 witness signature funds the swap through Satora's relay and
@@ -73,14 +75,14 @@ The Satora and ZeroDev code paths load in their own chunk, only when the USD scr
 
 All runtime, through the Docker entrypoint like the other `VITE_*` variables.
 
-| Variable                    | Purpose                                                                       |
-| --------------------------- | ----------------------------------------------------------------------------- |
-| `VITE_USDC_ENABLED`         | `true` turns the account on. Mainnet only, whatever this says.                |
-| `VITE_ZERODEV_PROJECT_ID`   | ZeroDev project for the bundler and ERC-20 paymaster. Sends need it.          |
-| `VITE_ARBITRUM_RPC_URL`     | Arbitrum One JSON-RPC. Defaults to `https://arb1.arbitrum.io/rpc`.            |
-| `VITE_SATORA_API_URL`       | Overrides Satora's API base URL. Defaults to the SDK's.                       |
-| `VITE_USDC_HISTORY_URL`     | Blockscout v2 API base. Defaults to `https://arbitrum.blockscout.com/api/v2`. |
-| `VITE_USDC_HISTORY_API_KEY` | Bearer key for that indexer, if it asks for one.                              |
+| Variable                    | Purpose                                                                      |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `VITE_USDC_ENABLED`         | `true` turns the account on. Mainnet only, whatever this says.               |
+| `VITE_ZERODEV_PROJECT_ID`   | ZeroDev project for the bundler and ERC-20 paymaster. Sends need it.         |
+| `VITE_ARBITRUM_RPC_URL`     | Arbitrum One JSON-RPC. Defaults to `https://arb1.arbitrum.io/rpc`.           |
+| `VITE_SATORA_API_URL`       | Overrides Satora's API base URL. Defaults to the SDK's.                      |
+| `VITE_USDC_HISTORY_URL`     | Optional Blockscout v2 API base. When unset, reads `Transfer` logs from RPC. |
+| `VITE_USDC_HISTORY_API_KEY` | Bearer key for that indexer, if it asks for one.                             |
 
 The CSP sets no `connect-src`, so none of these origins needs a header change.
 
