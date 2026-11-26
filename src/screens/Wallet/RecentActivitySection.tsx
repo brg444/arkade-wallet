@@ -12,14 +12,11 @@ import { useTranslation } from '../../providers/language'
  * Shows the most recent transactions with a View all link.
  */
 export default function RecentActivitySection() {
-  const { booting, dataReady, txs } = useContext(WalletContext)
-  // Until the first load lands, history is unknown: show neither rows nor an empty state.
-  const homeBusy = Boolean(booting) && !dataReady
+  const { txs } = useContext(WalletContext)
   const { navigate } = useContext(NavigationContext)
   const { t } = useTranslation()
 
   const handleViewAll = () => {
-    if (homeBusy) return
     hapticLight()
     navigate(Pages.Activity)
   }
@@ -37,18 +34,15 @@ export default function RecentActivitySection() {
           onClick={handleViewAll}
           aria-label={t('wallet.viewAllActivity')}
           data-testid='activity-view-all'
-          disabled={homeBusy}
           className='home-section-action home-section-action--quiet'
         >
           {t('wallet.viewAll')}
           <ArrowIcon small />
         </button>
       </div>
-      {homeBusy ? null : (
-        <div className='home-section__content'>
-          {empty ? <EmptyTxList /> : <TransactionsList mode='static' limit={3} />}
-        </div>
-      )}
+      <div className='home-section__content'>
+        {empty ? <EmptyTxList /> : <TransactionsList mode='static' limit={3} />}
+      </div>
     </section>
   )
 }

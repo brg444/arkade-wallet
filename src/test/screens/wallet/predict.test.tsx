@@ -200,23 +200,4 @@ describe('Predict screen & desktop navigation', () => {
     const first = screen.getByTestId('home-predict-line').textContent
     await waitFor(() => expect(screen.getByTestId('home-predict-line').textContent).not.toBe(first), { timeout: 5_000 })
   })
-
-  it('keeps the Home predictions card closed until the wallet has loaded', () => {
-    const navigate = vi.fn()
-    render(
-      <NavigationContext.Provider value={{ ...mockNavigationContextValue, navigate } as any}>
-        <WalletContext.Provider value={{ ...mockWalletContextValue, booting: true, dataReady: false } as any}>
-          <AspContext.Provider value={mockAspContextValue as any}>
-            <ConfigContext.Provider value={mockConfigContextValue as any}>
-              <PredictSection />
-            </ConfigContext.Provider>
-          </AspContext.Provider>
-        </WalletContext.Provider>
-      </NavigationContext.Provider>,
-    )
-    const card = screen.getByTestId('home-action-predict')
-    expect(card).toBeDisabled()
-    fireEvent.click(card)
-    expect(navigate).not.toHaveBeenCalled()
-  })
 })

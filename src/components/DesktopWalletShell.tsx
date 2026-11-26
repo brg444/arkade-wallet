@@ -7,7 +7,6 @@ import Glyph from '../icons/Glyph'
 import { hapticLight } from '../lib/haptics'
 import { SettingsOptions } from '../lib/types'
 import { NavigationContext, Pages } from '../providers/navigation'
-import { WalletContext } from '../providers/wallet'
 import { OptionsContext } from '../providers/options'
 import { AspContext } from '../providers/asp'
 import { getPredictConfig } from '../lib/predict/constants'
@@ -21,8 +20,6 @@ interface DesktopWalletShellProps {
 export default function DesktopWalletShell({ logoVisible, page }: DesktopWalletShellProps) {
   const { aspInfo } = useContext(AspContext)
   const { navigate } = useContext(NavigationContext)
-  const { booting, dataReady } = useContext(WalletContext)
-  const homeBusy = Boolean(booting) && !dataReady
   const { setOption, option } = useContext(OptionsContext)
 
   const { t } = useTranslation()
@@ -39,19 +36,16 @@ export default function DesktopWalletShell({ logoVisible, page }: DesktopWalletS
   }
 
   const goToPredict = () => {
-    if (homeBusy) return
     hapticLight()
     navigate(Pages.Predict)
   }
 
   const goToActivity = () => {
-    if (homeBusy) return
     hapticLight()
     navigate(Pages.Activity)
   }
 
   const goToSettings = () => {
-    if (homeBusy) return
     hapticLight()
     setOption(SettingsOptions.Menu)
     navigate(Pages.Settings)
@@ -85,7 +79,6 @@ export default function DesktopWalletShell({ logoVisible, page }: DesktopWalletS
             }
             aria-current={predictActive ? 'page' : undefined}
             data-testid='desktop-nav-predict'
-            disabled={homeBusy}
             onClick={goToPredict}
           >
             <Glyph name='predict' size={20} strokeWidth={1.8} />
@@ -99,7 +92,6 @@ export default function DesktopWalletShell({ logoVisible, page }: DesktopWalletS
           }
           aria-current={activityActive ? 'page' : undefined}
           data-testid='desktop-nav-activity'
-          disabled={homeBusy}
           onClick={goToActivity}
         >
           <HistoryIcon size={20} strokeWidth={1.8} />
@@ -112,9 +104,7 @@ export default function DesktopWalletShell({ logoVisible, page }: DesktopWalletS
           }
           aria-current={contactsActive ? 'page' : undefined}
           data-testid='desktop-nav-contacts'
-          disabled={homeBusy}
           onClick={() => {
-            if (homeBusy) return
             hapticLight()
             setOption(SettingsOptions.Contacts)
             navigate(Pages.Settings)
@@ -132,7 +122,6 @@ export default function DesktopWalletShell({ logoVisible, page }: DesktopWalletS
           }
           aria-current={settingsActive && !contactsActive ? 'page' : undefined}
           data-testid='desktop-nav-settings'
-          disabled={homeBusy}
           onClick={goToSettings}
         >
           <SettingsIcon size={19} strokeWidth={1.8} />
