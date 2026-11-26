@@ -6,6 +6,9 @@ import { AspContext } from '../providers/asp'
 import { FiatContext } from '../providers/fiat'
 import { WalletContext } from '../providers/wallet'
 import { designatedAccountCurrency, type FiatAccountSourceAsset } from '../lib/accountAssets'
+import { USD_ACCOUNT_ID, USDC_DECIMALS } from '../lib/usdc/config'
+import { usdcToNumber } from '../lib/usdc/amount'
+import { UsdcContext } from '../providers/usdc'
 
 export interface PortfolioRow {
   /** 'btc' for the native bitcoin row, otherwise the asset's on-chain id. */
@@ -50,6 +53,7 @@ export function usePortfolioFiat(): PortfolioFiat {
   const { balance, availableBalance, assetBalances, availableAssetBalances, assetMetadataCache, isVerifiedAsset } =
     useContext(WalletContext)
   const { toFiat, toFiatAmount } = useContext(FiatContext)
+  const usdc = useContext(UsdcContext)
 
   const rows: PortfolioRow[] = []
   let totalSats = 0
@@ -118,6 +122,26 @@ export function usePortfolioFiat(): PortfolioFiat {
       fiatAmount: 0,
       satsEquivalent: 0,
       hasFiatPrice: false,
+    })
+  }
+
+  // The USD account: one row for the person, held as USDC off Arkade (see
+  // lib/usdc). It counts toward the total like any other currency account.
+  if (usdc.available) {
+    const units = usdc.balance ?? BigInt(0)
+    const satsEquivalent = reportingSatsForFiatAmount(usdcToNumber(units), Currencies.USD, toFiatAmount)
+    totalSats += satsEquivalent
+    rows.push({
+      assetId: USD_ACCOUNT_ID,
+      name: Currencies.USD,
+      ticker: Currencies.USD,
+      decimals: USDC_DECIMALS,
+      balance: units,
+      spendableBalance: units,
+      fiatAmount: toFiat(satsEquivalent),
+      satsEquivalent,
+      hasFiatPrice: usdc.balance !== undefined,
+      fiatCurrency: Currencies.USD,
     })
   }
 

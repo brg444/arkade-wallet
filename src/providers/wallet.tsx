@@ -51,6 +51,9 @@ import { lnurlResyncOnPayment, syncLnurlActivity } from '../lib/lnurlActivitySyn
 import { assetSwapRepository, type WalletAssetSwap } from '../lib/swapRepository'
 import { nsecToPrivateKey, getPrivateKey, noUserDefinedPassword } from '../lib/privateKey'
 import { hasMnemonic, getMnemonic, deriveNostrKeyFromMnemonic } from '../lib/mnemonic'
+import { usdcAvailable } from '../lib/usdc/config'
+import { clearUsdcSession, setUsdcSessionFromMnemonic } from '../lib/usdc/keys'
+import { SATORA_DATABASE_NAME } from '../lib/usdc/swaps'
 import { resolveWalletMode } from '../lib/walletMode'
 import { calcBatchLifetimeMs, calcNextRollover } from '../lib/wallet'
 import { setLoadingStatus } from '../lib/loadingStatus'
@@ -1086,6 +1089,13 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         persisted: config.walletMode,
       })
       initialiseNostrBackup(deriveNostrKeyFromMnemonic(credentials.mnemonic, isMainnet(network)))
+      if (usdcAvailable(network, true)) {
+        try {
+          setUsdcSessionFromMnemonic(credentials.mnemonic)
+        } catch (err) {
+          consoleError(err, 'failed to derive the USDC account key')
+        }
+      }
       updateConfig({ ...config, pubkey, walletMode })
     } else if (credentials.privateKey) {
       identity = SingleKey.fromPrivateKey(credentials.privateKey)
@@ -1193,6 +1203,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     reloadTimerRef.current = undefined
     lnurlResyncRef.current?.cancel()
     removeServiceWorkerMessageHandler()
+    clearUsdcSession()
     await svcWallet.clear()
     setAuthState('locked')
     setInitialized(false)
@@ -1227,8 +1238,11 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     walletWiped.current = true
     loadCompleted.current = false
     setLastHomeShown(false)
+    clearUsdcSession()
     // clearStorage() wipes every key, so contacts and recents go with it.
     await clearStorage()
+    // Satora keeps USDC swap secrets in its own IndexedDB. Never fatal, like the swap records below.
+    if (typeof indexedDB !== 'undefined') indexedDB.deleteDatabase(SATORA_DATABASE_NAME)
     // swap records outlive localStorage now: without this a reset leaves the
     // previous wallet's swaps in the activity list. Never fatal — a reset that
     // aborted here would leave the wallet itself half-cleared, which is worse

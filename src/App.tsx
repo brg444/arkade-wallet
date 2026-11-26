@@ -48,6 +48,7 @@ const DESKTOP_WALLET_PAGES = new Set([
   Pages.SendSuccess,
   Pages.Settings,
   Pages.Transaction,
+  Pages.Usdc,
   Pages.Vtxos,
   Pages.Wallet,
   Pages.WalletSwap,

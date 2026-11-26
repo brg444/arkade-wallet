@@ -38,6 +38,7 @@ import { buildConstantMarketSeries, buildCrossRatePoints, fetchHistoricalMarketD
 import { accountChartColorToken, normalizeAssetMinorUnits } from '../../lib/accountAssets'
 import { WalletContext } from '../../providers/wallet'
 import { useTranslation } from '../../providers/language'
+import { UsdcContext } from '../../providers/usdc'
 
 const CHART_WINDOWS = [
   { label: '1H', secs: 3_600 },
@@ -71,6 +72,7 @@ export default function BitcoinDetail({ assetId = 'btc' }: { assetId?: string })
   const { setRecvInfo, setSendInfo, setSwapFromAssetId } = useContext(FlowContext)
   const { navigate } = useContext(NavigationContext)
   const { swapAvailable } = useContext(SwapsContext)
+  const usdc = useContext(UsdcContext)
   const { assetMetadataCache, txs } = useContext(WalletContext)
   const { rows } = usePortfolioFiat()
   const prefersReduced = useReducedMotion()
@@ -205,7 +207,8 @@ export default function BitcoinDetail({ assetId = 'btc' }: { assetId?: string })
 
   const handleSwap = () => {
     hapticLight()
-    if (swapAvailable) {
+    // with no Arkade market up, Bitcoin can still swap to the USD account
+    if (swapAvailable || (isBitcoin && usdc.available)) {
       setSwapFromAssetId(row.assetId)
       navigate(Pages.WalletSwap)
     } else {

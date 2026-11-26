@@ -12,6 +12,8 @@ import { prettyFiatAmount } from '../../lib/format'
 import { FlowContext } from '../../providers/flow'
 import { WalletContext } from '../../providers/wallet'
 import { useTranslation } from '../../providers/language'
+import { UsdcContext } from '../../providers/usdc'
+import { USD_ACCOUNT_ID } from '../../lib/usdc/config'
 
 export default function AssetsSection() {
   const { swapAvailable } = useContext(SwapsContext)
@@ -22,11 +24,14 @@ export default function AssetsSection() {
   const { navigate } = useContext(NavigationContext)
   const { isVerifiedAsset } = useContext(WalletContext)
   const { t } = useTranslation()
+  const usdc = useContext(UsdcContext)
 
   const { rows } = usePortfolioFiat()
   // unverified assets are spoofable, so they never show on home at all —
   // they stay manageable in the Arkade Mint app
-  const accountRows = rows.filter((row) => row.assetId === 'btc' || isVerifiedAsset(row.assetId))
+  const accountRows = rows.filter(
+    (row) => row.assetId === 'btc' || row.assetId === USD_ACCOUNT_ID || isVerifiedAsset(row.assetId),
+  )
 
   const fiatLabel = (amount: number) => {
     const decimals = fiatDecimals()
@@ -40,6 +45,8 @@ export default function AssetsSection() {
   const handleAssetClick = (row: PortfolioRow) => {
     if (row.assetId === 'btc') {
       navigate(Pages.BitcoinDetail)
+    } else if (row.assetId === USD_ACCOUNT_ID) {
+      navigate(Pages.Usdc)
     } else if (row.fiatCurrency) {
       setAssetInfo({ assetId: row.assetId, supply: BigInt(0) })
       navigate(Pages.AccountDetail)
@@ -51,7 +58,7 @@ export default function AssetsSection() {
 
   const handleSwap = () => {
     hapticLight()
-    if (swapAvailable) navigate(Pages.WalletSwap)
+    if (swapAvailable || usdc.available) navigate(Pages.WalletSwap)
     else setSwapSheetOpen(true)
   }
 
@@ -75,6 +82,7 @@ export default function AssetsSection() {
             decimals={row.decimals}
             balance={row.balance}
             fiatText={row.hasFiatPrice ? fiatLabel(row.fiatAmount) : undefined}
+            trusted={row.assetId === USD_ACCOUNT_ID}
             onClick={() => handleAssetClick(row)}
           />
         ))}

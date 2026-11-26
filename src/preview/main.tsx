@@ -19,6 +19,7 @@ import { FlowContext } from '../providers/flow'
 import { WalletContext } from '../providers/wallet'
 import { SwapsContext } from '../providers/swaps'
 import { LimitsContext } from '../providers/limits'
+import { UsdcContext } from '../providers/usdc'
 import { OptionsProvider } from '../providers/options'
 import { LanguageProvider } from '../providers/language'
 import { ToastProvider } from '../components/Toast'
@@ -96,19 +97,21 @@ function Harness() {
                 <FlowContext.Provider value={flowValue as any}>
                   <WalletContext.Provider value={fixtures.wallet as any}>
                     <SwapsContext.Provider value={fixtures.swaps as any}>
-                      <LimitsContext.Provider value={fixtures.limits as any}>
-                        <OptionsProvider>
-                          <ToastProvider>
-                            <div className='page' data-testid='app'>
-                              <AnimatePresence mode='sync' initial={false} custom={motion}>
-                                <PageTransition key={String(screen)} direction={motion} pageKey={String(screen)}>
-                                  {special ? special() : pageComponent(screen)}
-                                </PageTransition>
-                              </AnimatePresence>
-                            </div>
-                          </ToastProvider>
-                        </OptionsProvider>
-                      </LimitsContext.Provider>
+                      <UsdcContext.Provider value={fixtures.usdc as any}>
+                        <LimitsContext.Provider value={fixtures.limits as any}>
+                          <OptionsProvider>
+                            <ToastProvider>
+                              <div className='page' data-testid='app'>
+                                <AnimatePresence mode='sync' initial={false} custom={motion}>
+                                  <PageTransition key={String(screen)} direction={motion} pageKey={String(screen)}>
+                                    {special ? special() : pageComponent(screen)}
+                                  </PageTransition>
+                                </AnimatePresence>
+                              </div>
+                            </ToastProvider>
+                          </OptionsProvider>
+                        </LimitsContext.Provider>
+                      </UsdcContext.Provider>
                     </SwapsContext.Provider>
                   </WalletContext.Provider>
                 </FlowContext.Provider>

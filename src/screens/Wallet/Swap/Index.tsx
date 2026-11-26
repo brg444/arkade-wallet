@@ -41,6 +41,20 @@ import { usePortfolioFiat, type PortfolioRow } from '../../../hooks/usePortfolio
 import { useReducedMotion } from '../../../hooks/useReducedMotion'
 import { verifiedDesignatedCurrency } from '../../../lib/accountAssets'
 import { useTranslation } from '../../../providers/language'
+import { UsdcContext } from '../../../providers/usdc'
+import { USD_ACCOUNT_ID, USDC_DECIMALS } from '../../../lib/usdc/config'
+import { routeQuoteFromPlan, type RouteQuote, type SwapRail } from '../../../lib/swapRoute'
+import {
+  executeSatoraSwap,
+  routeQuoteFromSatora,
+  satoraDirectionFor,
+  satoraGiveLimit,
+  satoraSourceUnits,
+} from '../../../lib/usdc/route'
+import { useSatoraQuote } from '../../../hooks/useSatoraQuote'
+import type { UsdcSwapQuote } from '../../../lib/usdc/satora'
+import type { UsdcSwapDirection } from '../../../lib/usdc/swaps'
+import { consoleError } from '../../../lib/logs'
 
 type AssetTarget = 'from' | 'to'
 type DrawerState = 'to' | 'review' | null
@@ -95,8 +109,10 @@ export default function WalletSwap() {
   const { fiatDecimals, fromFiatAmount, toFiat, toFiatAmount } = useContext(FiatContext)
   const { swapFromAssetId, setSwapFromAssetId } = useContext(FlowContext)
   const { goBack, navigate } = useContext(NavigationContext)
-  const { assetMetadataCache, availableAssetBalances, availableBalance, isVerifiedAsset } = useContext(WalletContext)
+  const { assetMetadataCache, availableAssetBalances, availableBalance, isVerifiedAsset, reloadWallet, svcWallet } =
+    useContext(WalletContext)
   const { rows } = usePortfolioFiat()
+  const usdc = useContext(UsdcContext)
   const prefersReduced = useReducedMotion()
   const { t } = useTranslation()
 
@@ -169,7 +185,30 @@ export default function WalletSwap() {
     toFiat,
     toFiatAmount,
   ])
-  const initialFromAssetId = resolveInitialFromAssetId(swapAssets, swapFromAssetId)
+  // The USD account is filled by Satora, not an Arkade market, but it is an
+  // asset like any other here: it composes, reviews and confirms through the
+  // same screen, and only the rail underneath changes (see lib/swapRoute).
+  // While it exists it is the one USD, so no other USD-designated asset shows.
+  const usdRow = rows.find((row) => row.assetId === USD_ACCOUNT_ID)
+  const usdAsset: SwapAsset | undefined = usdc.available
+    ? {
+        assetId: USD_ACCOUNT_ID,
+        name: Currencies.USD,
+        ticker: Currencies.USD,
+        currency: Currencies.USD,
+        // entered and shown in cents like any USD account
+        decimals: 2,
+        balance: (usdc.balance ?? BigInt(0)) / BigInt(10) ** BigInt(USDC_DECIMALS - 2),
+        fiatText: usdRow?.hasFiatPrice
+          ? prettyFiatAmount(usdRow.fiatAmount, config.currency, { bitcoinUnit: config.unit })
+          : undefined,
+        usdPrice: 1,
+      }
+    : undefined
+  const allAssets = usdAsset
+    ? [...swapAssets.filter((asset) => asset.currency !== Currencies.USD), usdAsset]
+    : swapAssets
+  const initialFromAssetId = resolveInitialFromAssetId(allAssets, swapFromAssetId)
   const openedWithPreselectedAsset = useRef(Boolean(swapFromAssetId))
   const [step, setStep] = useState<SwapStep>(swapFromAssetId && initialFromAssetId ? 'compose' : 'select-from')
   const [search, setSearch] = useState('')
@@ -182,7 +221,7 @@ export default function WalletSwap() {
     currencyAmount: string
     entryMode: AmountMode
   }>()
-  const [fromAssetId, setFromAssetId] = useState(initialFromAssetId ?? swapAssets[0]?.assetId ?? 'btc')
+  const [fromAssetId, setFromAssetId] = useState(initialFromAssetId ?? allAssets[0]?.assetId ?? 'btc')
   const [toAssetId, setToAssetId] = useState<string | undefined>()
   const [drawer, setDrawer] = useState<DrawerState>(null)
   const [swapTurn, setSwapTurn] = useState(0)
@@ -191,12 +230,12 @@ export default function WalletSwap() {
   const [successQuote, setSuccessQuote] = useState<SwapQuote>()
 
   const fromAsset =
-    swapAssets.find((asset) => asset.assetId === fromAssetId) ??
-    firstPositiveBalanceAsset(swapAssets) ??
-    swapAssets[0] ??
+    allAssets.find((asset) => asset.assetId === fromAssetId) ??
+    firstPositiveBalanceAsset(allAssets) ??
+    allAssets[0] ??
     emptySwapAsset
   const toAsset = toAssetId
-    ? swapAssets.find((asset) => asset.assetId === toAssetId && asset.assetId !== fromAsset.assetId)
+    ? allAssets.find((asset) => asset.assetId === toAssetId && asset.assetId !== fromAsset.assetId)
     : undefined
   const unitOfAccountUsd = toFiatAmount(fromFiatAmount(1, config.currency), Currencies.USD)
   const currencyConversionUseful = hasDistinctCurrencyConversion(fromAsset, config.currency, unitOfAccountUsd)
@@ -209,7 +248,11 @@ export default function WalletSwap() {
     setSelectedAmountMode('asset')
   }, [currencyConversionUseful, selectedAmountMode])
 
-  const pair = toAsset ? findMarket(markets, fromAsset.assetId, toAsset.assetId) : undefined
+  // the rail is a property of the pair: Satora for Bitcoin and USD, an Arkade
+  // market for everything else
+  const satoraDirection = toAsset ? satoraDirectionFor(fromAsset.assetId, toAsset.assetId, BTC_ASSET_ID) : undefined
+  const rail: SwapRail = satoraDirection ? 'satora' : 'arkade'
+  const pair = toAsset && !satoraDirection ? findMarket(markets, fromAsset.assetId, toAsset.assetId) : undefined
   // per-mount cache: a burst of keystroke-debounced quotes reuses one feed
   // value instead of getting rate-limited into "Quote unavailable"
   const feedFetch = useMemo(() => makeCachedFeedFetch(), [])
@@ -218,46 +261,80 @@ export default function WalletSwap() {
     fetchImpl: feedFetch,
     ...QUOTE_OPTIONS,
   })
+  const satora = useSatoraQuote(satoraDirection)
+  const setSatoraGiveAmount = satora.setGiveAmount
   const preservedAmounts = preservedAmountPair?.assetId === fromAsset.assetId ? preservedAmountPair : undefined
   const assetAmount =
     preservedAmounts?.assetAmount ?? amountInAssetUnits(amount, amountMode, fromAsset, unitOfAccountUsd)
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setGiveAmount(Number(assetAmount) > 0 ? amountForQuote(assetAmount, fromAsset) : '')
+      const give = Number(assetAmount) > 0 ? amountForQuote(assetAmount, fromAsset) : ''
+      setGiveAmount(give)
+      setSatoraGiveAmount(give)
     }, 600)
     return () => window.clearTimeout(timer)
-  }, [assetAmount, fromAsset, setGiveAmount])
+  }, [assetAmount, fromAsset, setGiveAmount, setSatoraGiveAmount])
 
   const planMatchesAssetAmount = Boolean(
     plan && new Decimal(plan.deposit.display).eq(amountForQuote(assetAmount, fromAsset) || '0'),
   )
-  const currentPlan = status === 'success' && planMatchesAssetAmount ? plan : null
-  const quoteStale = Boolean(toAsset && Number(assetAmount) > 0 && !currentPlan)
+  const currentPlan = !satoraDirection && status === 'success' && planMatchesAssetAmount ? plan : null
+  const satoraQuote =
+    satoraDirection &&
+    satora.status === 'success' &&
+    satora.direction === satoraDirection &&
+    satora.quote &&
+    satoraSourceUnits(satoraDirection, satora.give) ===
+      satoraSourceUnits(satoraDirection, amountForQuote(assetAmount, fromAsset) || '0')
+      ? satora.quote
+      : undefined
+  // what the composer reads, whichever rail priced it
+  const routeQuote = useMemo<RouteQuote | null>(
+    () =>
+      satoraDirection
+        ? satoraQuote
+          ? routeQuoteFromSatora(satoraDirection, satoraQuote)
+          : null
+        : currentPlan
+          ? routeQuoteFromPlan(currentPlan)
+          : null,
+    [currentPlan, satoraDirection, satoraQuote],
+  )
+  const quoteStatus = satoraDirection ? satora.status : status
+  const quoteStale = Boolean(toAsset && Number(assetAmount) > 0 && !routeQuote)
   const planError = currentPlan ? validatePlan(currentPlan, assetBalanceAtomic(fromAsset), aspInfo.dust) : undefined
   const amountAtomic = unitsToAtomic(assetAmount, fromAsset.decimals)
   const exceedsBalance = amountAtomic > assetBalanceAtomic(fromAsset)
   // a partial asset deposit leaves asset change, and that change needs a second
   // dust carrier; without one the SDK fails with a bare "Insufficient funds"
   const lacksChangeCarrier =
+    rail === 'arkade' &&
     fromAsset.assetId !== BTC_ASSET_ID &&
     amountAtomic < assetBalanceAtomic(fromAsset) &&
     availableBalance < 2 * Number(aspInfo.dust)
-  const validationMessage = swapValidationMessage({
-    amount,
-    exceedsBalance,
-    lacksChangeCarrier,
-    fromAsset,
-    pairAvailable: toAsset ? Boolean(pair?.market) : undefined,
-    plan: currentPlan,
-    planError,
-    solvable: solvable ?? undefined,
-    status,
-  })
+  const validationMessage = satoraDirection
+    ? satoraValidationMessage({
+        amount,
+        exceedsBalance,
+        status: satora.status,
+        limit: satoraQuote && routeQuote ? satoraLimitMessage(satoraDirection, satoraQuote, routeQuote, fromAsset) : '',
+      })
+    : swapValidationMessage({
+        amount,
+        exceedsBalance,
+        lacksChangeCarrier,
+        fromAsset,
+        pairAvailable: toAsset ? Boolean(pair?.market) : undefined,
+        plan: currentPlan,
+        planError,
+        solvable: solvable ?? undefined,
+        status,
+      })
   const quote = useMemo(
     () =>
-      buildQuoteFromPlan(
-        currentPlan,
+      buildQuoteFromRoute(
+        routeQuote,
         assetAmount,
         preservedAmounts?.entryMode ?? amountMode,
         fromAsset,
@@ -271,7 +348,7 @@ export default function WalletSwap() {
       assetAmount,
       config.currency,
       config.unit,
-      currentPlan,
+      routeQuote,
       fromAsset,
       preservedAmounts?.entryMode,
       toAsset,
@@ -294,25 +371,29 @@ export default function WalletSwap() {
         : 'idle'
   const balanceValidation = isBalanceLimitValidation(validationMessage) ? validationMessage : ''
 
-  const quoteLoading = status === 'loading' || (quoteStale && hasPositiveAmount)
-  const canContinue = Boolean(toAsset && currentPlan && !planError && !validationMessage)
+  const quoteLoading = quoteStatus === 'loading' || (quoteStale && hasPositiveAmount)
+  const canContinue = Boolean(toAsset && routeQuote && !planError && !validationMessage)
 
   const stageTransition = prefersReduced ? { duration: 0 } : { duration: 0.28, ease: EASE_IN_OUT_QUINT_TUPLE }
 
-  const filteredAssets = useMemo(() => filterAssets(swapAssets, search), [search, swapAssets])
+  const filteredAssets = filterAssets(allAssets, search)
 
   useEffect(() => {
-    if (swapAssets.length === 0) return
-    const currentAssetStillAvailable = swapAssets.some((asset) => asset.assetId === fromAssetId)
+    if (allAssets.length === 0) return
+    const currentAssetStillAvailable = allAssets.some((asset) => asset.assetId === fromAssetId)
     if (currentAssetStillAvailable) return
-    setFromAssetId(resolveInitialFromAssetId(swapAssets, swapFromAssetId) ?? swapAssets[0]?.assetId ?? 'btc')
-  }, [fromAssetId, swapAssets, swapFromAssetId])
+    setFromAssetId(resolveInitialFromAssetId(allAssets, swapFromAssetId) ?? allAssets[0]?.assetId ?? 'btc')
+  }, [allAssets, fromAssetId, swapFromAssetId])
 
   const focusFromAsset = useCallback(
     (assetId: string) => {
       setFromAssetId(assetId)
       setToAssetId((current) =>
-        current && current !== assetId && findMarket(markets, assetId, current)?.market ? current : undefined,
+        current &&
+        current !== assetId &&
+        (findMarket(markets, assetId, current)?.market || satoraDirectionFor(assetId, current, BTC_ASSET_ID))
+          ? current
+          : undefined,
       )
       setSearch('')
       setStep('compose')
@@ -321,18 +402,18 @@ export default function WalletSwap() {
   )
 
   useEffect(() => {
-    if (!swapFromAssetId || swapAssets.length === 0) return
-    if (!swapAvailable) {
+    if (!swapFromAssetId || allAssets.length === 0) return
+    if (!swapAvailable && !usdAsset) {
       setSwapFromAssetId(undefined)
       setStep('select-from')
       return
     }
 
-    const nextFromAssetId = resolveInitialFromAssetId(swapAssets, swapFromAssetId) ?? swapAssets[0]?.assetId ?? 'btc'
+    const nextFromAssetId = resolveInitialFromAssetId(allAssets, swapFromAssetId) ?? allAssets[0]?.assetId ?? 'btc'
 
     focusFromAsset(nextFromAssetId)
     setSwapFromAssetId(undefined)
-  }, [focusFromAsset, setSwapFromAssetId, swapAssets, swapAvailable, swapFromAssetId])
+  }, [allAssets, focusFromAsset, setSwapFromAssetId, swapAvailable, swapFromAssetId, usdAsset])
 
   const swapCommitted = confirming || Boolean(successQuote)
 
@@ -464,15 +545,30 @@ export default function WalletSwap() {
   }, [handleSuccessDone, successQuote])
 
   const confirmSwap = async () => {
-    if (!plan || !toAsset || !pair?.market || confirming || !canContinue) return
+    if (!toAsset || confirming || !canContinue) return
+    if (rail === 'arkade' && (!plan || !pair?.market)) return
+    if (rail === 'satora' && (!satoraDirection || !satoraQuote || !usdc.session || !svcWallet)) return
 
     setConfirmError('')
     setConfirming(true)
     try {
-      // The market the plan was quoted against, not one re-looked-up at confirm
-      // time: `accept` funds the plan the user just read, and a second lookup
-      // could name a different card.
-      await exchange(pair.market, plan, buildQuoteSnapshot(plan, quote, config.currency))
+      if (satoraDirection && satoraQuote && usdc.session && svcWallet) {
+        await executeSatoraSwap({
+          session: usdc.session,
+          arkServerUrl: aspInfo.url,
+          wallet: svcWallet,
+          direction: satoraDirection,
+          quote: satoraQuote,
+          recordSwap: usdc.recordSwap,
+        })
+        if (satoraDirection === 'toUsdc') reloadWallet().catch(consoleError)
+        else usdc.refresh()
+      } else if (plan && pair?.market) {
+        // The market the plan was quoted against, not one re-looked-up at confirm
+        // time: `accept` funds the plan the user just read, and a second lookup
+        // could name a different card.
+        await exchange(pair.market, plan, buildQuoteSnapshot(plan, quote, config.currency))
+      }
       setDrawer(null)
       setSuccessQuote(quote)
       hapticLight()
@@ -483,8 +579,10 @@ export default function WalletSwap() {
     }
   }
 
-  const receiveAssets = swapAssets.filter((asset) =>
-    Boolean(findMarket(markets, fromAsset.assetId, asset.assetId)?.market),
+  const receiveAssets = allAssets.filter(
+    (asset) =>
+      Boolean(findMarket(markets, fromAsset.assetId, asset.assetId)?.market) ||
+      Boolean(satoraDirectionFor(fromAsset.assetId, asset.assetId, BTC_ASSET_ID)),
   )
 
   return (
@@ -503,7 +601,7 @@ export default function WalletSwap() {
                   exit={prefersReduced ? undefined : { opacity: 0, x: -16 }}
                   transition={stageTransition}
                 >
-                  {swapAvailable ? (
+                  {swapAvailable || usdAsset ? (
                     <SwapAssetList
                       title={t('swap.chooseAssetToSwap')}
                       search={search}
@@ -1336,8 +1434,8 @@ function MetricRow({
   )
 }
 
-function buildQuoteFromPlan(
-  plan: OfferPlan | null,
+function buildQuoteFromRoute(
+  route: RouteQuote | null,
   assetAmount: string,
   entryMode: AmountMode,
   fromAsset: SwapAsset,
@@ -1355,14 +1453,14 @@ function buildQuoteFromPlan(
   // as the solver's plan.*.display — do the USD math and the rate in that
   // scale, and only convert to sats for the on-screen amount labels below.
   const estimatedFromUnitsProtocol = parsed / fromScale
-  const fromUnitsProtocol = plan ? Number(plan.deposit.display) : estimatedFromUnitsProtocol
-  const receivedProtocol = plan && toAsset ? Number(plan.receive.display) : 0
+  const fromUnitsProtocol = route ? route.deposit : estimatedFromUnitsProtocol
+  const receivedProtocol = route && toAsset ? route.receive : 0
   const fromUnits = fromUnitsProtocol * fromScale
   const received = receivedProtocol * toScale
   const fromCurrencyAvailable = hasCurrencyConversion(fromAsset, unitOfAccountUsd)
   const toCurrencyAvailable = Boolean(toAsset && hasCurrencyConversion(toAsset, unitOfAccountUsd))
   const receivedCurrencyAmount = toCurrencyAvailable ? (receivedProtocol * toUsd) / unitOfAccountUsd : 0
-  const feeFraction = (plan?.market.fee_bps ?? 0) / 10_000
+  const feeFraction = route?.feeFraction ?? 0
   // received amounts are net of the fee; grossUp recovers the pre-fee total
   const grossUp = feeFraction < 1 ? 1 / (1 - feeFraction) : 0
   // once a live quote exists, price the give side off that SAME quote (via
@@ -1375,11 +1473,11 @@ function buildQuoteFromPlan(
   // $0 just because the receive side can't be valued.
   const giveEstimate = fromCurrencyAvailable ? (fromUnitsProtocol * fromUsd) / unitOfAccountUsd : 0
   const selectedCurrencyAmount =
-    plan && toAsset && grossUp > 0 && receivedCurrencyAmount > 0 ? receivedCurrencyAmount * grossUp : giveEstimate
+    route && toAsset && grossUp > 0 && receivedCurrencyAmount > 0 ? receivedCurrencyAmount * grossUp : giveEstimate
   // the review drawer's Fees row itemizes the fee, so the Rate row quotes the
   // market feed's pre-fee price — a net-derived rate would count the fee
   // twice and read consistently fee_bps below the market
-  const rate = plan ? preFeeDisplayRate(plan) : 0
+  const rate = route ? route.rate : 0
   // the market fee is deducted from the payout, so show it in the receive
   // asset (like the Swap/Receive rows), not the wallet's fiat display currency:
   // the fee is the gross-minus-net gap
@@ -1493,6 +1591,40 @@ function swapValidationMessage({
   }
 }
 
+function satoraValidationMessage({
+  amount,
+  exceedsBalance,
+  status,
+  limit,
+}: {
+  amount: string
+  exceedsBalance: boolean
+  status: string
+  limit: string
+}): string {
+  if (!Number(amount)) return ''
+  if (exceedsBalance) return 'Insufficient balance'
+  if (status === 'error') return 'Quote unavailable'
+  return limit
+}
+
+/** Satora bounds a swap by its Bitcoin side in sats; quote it on the give side. */
+function satoraLimitMessage(
+  direction: UsdcSwapDirection,
+  satoraQuote: UsdcSwapQuote,
+  route: RouteQuote,
+  fromAsset: SwapAsset,
+): string {
+  const bitcoinSide = direction === 'toUsdc' ? satoraQuote.sourceAmount : satoraQuote.targetAmount
+  if (satoraQuote.minSats > BigInt(0) && bitcoinSide < satoraQuote.minSats) {
+    return formatGiveLimit('Minimum', satoraGiveLimit(direction, satoraQuote.minSats, route), fromAsset)
+  }
+  if (satoraQuote.maxSats > BigInt(0) && bitcoinSide > satoraQuote.maxSats) {
+    return formatGiveLimit('Maximum', satoraGiveLimit(direction, satoraQuote.maxSats, route), fromAsset)
+  }
+  return ''
+}
+
 function isBalanceLimitValidation(message: string): boolean {
   return message === 'Insufficient balance' || message.startsWith('Minimum ') || message.startsWith('Maximum ')
 }
@@ -1554,6 +1686,12 @@ function formatLimitMessage(
   const combinedProtocol = isMin
     ? Math.max(giveProtocol, giveCardProtocol)
     : Math.min(giveProtocol, giveCardProtocol || Infinity)
+  return formatGiveLimit(label, combinedProtocol, fromAsset)
+}
+
+/** A give-side bound in whole protocol units, as the person types it. */
+function formatGiveLimit(label: string, combinedProtocol: number, fromAsset: SwapAsset): string {
+  const isMin = label === 'Minimum'
   const raw = combinedProtocol * protocolToDisplayScale(fromAsset)
   // round the bound so the displayed amount actually satisfies it: a minimum
   // rounds up, a maximum rounds down — round-to-nearest could display a
