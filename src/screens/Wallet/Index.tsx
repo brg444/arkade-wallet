@@ -8,7 +8,7 @@ import HomeIcon from '../../icons/Home'
 import Padded from '../../components/Padded'
 import Content from '../../components/Content'
 import FlexCol from '../../components/FlexCol'
-import { NavigationContext } from '../../providers/navigation'
+import { NavigationContext, Pages } from '../../providers/navigation'
 import { NudgeContext } from '../../providers/nudge'
 import { AnnouncementContext } from '../../providers/announcements'
 import { WalletStaggerContainer, WalletStaggerChild } from '../../components/WalletLoadIn'
@@ -19,7 +19,8 @@ import { getPredictConfig } from '../../lib/predict/constants'
 import HomeHeader from './HomeHeader'
 import PortfolioHero from './PortfolioHero'
 import HomeQuickActions from './HomeQuickActions'
-import AssetsSection from './AssetsSection'
+import AssetsSection, { useHomeAccountRows } from './AssetsSection'
+import ReceiveAssetSheet from './ReceiveAssetSheet'
 import PredictSection from './PredictSection'
 import RecentActivitySection from './RecentActivitySection'
 import ContactsSection from './ContactsSection'
@@ -28,13 +29,15 @@ import { usePortfolioBalanceDisplay } from '../../hooks/usePortfolioBalanceDispl
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { BackupContext } from '@/providers/backup'
 import { useTranslation } from '../../providers/language'
+import { FlowContext, emptyRecvInfo } from '../../providers/flow'
 
 export default function Wallet() {
   const { aspInfo } = useContext(AspContext)
   const { announcement } = useContext(AnnouncementContext)
   const { config } = useContext(ConfigContext)
   const { backupAndUpdateConfig } = useContext(BackupContext)
-  const { isInitialLoad } = useContext(NavigationContext)
+  const { isInitialLoad, navigate } = useContext(NavigationContext)
+  const { setRecvInfo } = useContext(FlowContext)
   const { nudge, nudgeCheckComplete } = useContext(NudgeContext)
   const { t } = useTranslation()
   const predictEnabled = getPredictConfig(aspInfo.network, aspInfo.url || undefined).enabled
@@ -115,6 +118,15 @@ export default function Wallet() {
 
   const contacts = useMemo(readContacts, [])
 
+  // Receive asks what is coming in once there is more than Bitcoin to choose
+  const accountRows = useHomeAccountRows()
+  const [receiveSheetOpen, setReceiveSheetOpen] = useState(false)
+  const handleReceive = () => {
+    if (accountRows.length > 1) return setReceiveSheetOpen(true)
+    setRecvInfo(emptyRecvInfo)
+    navigate(Pages.ReceiveQRCode)
+  }
+
   return (
     <Content className={homeScrolled ? 'wallet-home-content wallet-home-content--scrolled' : 'wallet-home-content'}>
       <Padded>
@@ -130,7 +142,7 @@ export default function Wallet() {
             <PortfolioHero ref={balanceRef} collapseProgress={balanceCollapseProgress} />
           </WalletStaggerChild>
           <WalletStaggerChild animate={shouldStagger} className='home-stack__actions'>
-            <HomeQuickActions />
+            <HomeQuickActions onReceive={handleReceive} />
           </WalletStaggerChild>
           {hasHomeNotices ? (
             <WalletStaggerChild animate={shouldStagger}>
@@ -184,6 +196,7 @@ export default function Wallet() {
           </WalletStaggerChild>
         </WalletStaggerContainer>
       </Padded>
+      <ReceiveAssetSheet isOpen={receiveSheetOpen} rows={accountRows} onClose={() => setReceiveSheetOpen(false)} />
     </Content>
   )
 }

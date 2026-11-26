@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import Content from '../../../components/Content'
 import Figure from '../../../components/Figure'
 import Header from '../../../components/Header'
@@ -29,18 +29,25 @@ export default function Usdc() {
   const { session, balance, refresh } = useContext(UsdcContext)
   const { config } = useContext(ConfigContext)
   const { fiatDecimals } = useContext(FiatContext)
-  const { setAssetInfo, setSwapFromAssetId } = useContext(FlowContext)
-  const { navigate } = useContext(NavigationContext)
+  const { setAssetInfo, setSwapFromAssetId, usdcEntry, setUsdcEntry } = useContext(FlowContext)
+  const { navigate, goBack } = useContext(NavigationContext)
   const { rows } = usePortfolioFiat()
   // the merged row: every dollar the person holds, on whichever rail
   const row = rows.find((candidate) => candidate.assetId === USD_ACCOUNT_ID)
   const { t } = useTranslation()
-  const [view, setView] = useState<UsdcView>('overview')
+  // Receive from Home lands straight on the address, and Back returns Home
+  const entry = useRef(usdcEntry).current
+  const [view, setView] = useState<UsdcView>(entry ?? 'overview')
 
-  const back = () => setView('overview')
+  useEffect(() => {
+    if (usdcEntry) setUsdcEntry(undefined)
+  }, [usdcEntry, setUsdcEntry])
+
+  const back = () => (entry && view === entry ? goBack() : setView('overview'))
 
   // the hardware back button closes a sub-view before it leaves the account
-  useEffect(() => (view === 'overview' ? undefined : holdBackLayer(back)), [view])
+  // (opened straight on a sub-view, the page's own back already returns Home)
+  useEffect(() => (view === 'overview' || view === entry ? undefined : holdBackLayer(back)), [view])
 
   useEffect(() => {
     refresh()
