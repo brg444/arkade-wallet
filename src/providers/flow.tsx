@@ -90,8 +90,8 @@ interface FlowContextProps {
   recvInfo: RecvInfo
   sendInfo: SendInfo
   swapFromAssetId: string | undefined
-  /** Opens the USD account on its Receive view, for Receive from Home. */
-  usdcEntry: 'receive' | undefined
+  /** Opens the USD account on its Receive or Send view, for those actions from Home. */
+  usdcEntry: 'receive' | 'send' | undefined
   txInfo: TxInfo
   setInitInfo: (arg0: InitInfo) => void
   setNoteInfo: (arg0: NoteInfo) => void
@@ -100,7 +100,7 @@ interface FlowContextProps {
   setRecvInfo: (arg0: SetStateAction<RecvInfo>) => void
   setSendInfo: (arg0: SetStateAction<SendInfo>) => void
   setSwapFromAssetId: (arg0: string | undefined) => void
-  setUsdcEntry: (arg0: 'receive' | undefined) => void
+  setUsdcEntry: (arg0: 'receive' | 'send' | undefined) => void
   setTxInfo: (arg0: TxInfo) => void
   assetInfo: AssetDetails
   setAssetInfo: (arg0: AssetDetails) => void
@@ -168,7 +168,7 @@ export const FlowProvider = ({ children }: { children: ReactNode }) => {
   const [recvInfo, setRecvInfo] = useState(emptyRecvInfo)
   const [sendInfo, setSendInfo] = useState(emptySendInfo)
   const [swapFromAssetId, setSwapFromAssetId] = useState<string | undefined>()
-  const [usdcEntry, setUsdcEntry] = useState<'receive' | undefined>()
+  const [usdcEntry, setUsdcEntry] = useState<'receive' | 'send' | undefined>()
   const [txInfo, setTxInfo] = useState<TxInfo>()
   const [assetInfo, setAssetInfo] = useState<AssetDetails>(emptyAssetInfo)
 

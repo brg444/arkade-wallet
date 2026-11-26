@@ -8,7 +8,7 @@ import HomeIcon from '../../icons/Home'
 import Padded from '../../components/Padded'
 import Content from '../../components/Content'
 import FlexCol from '../../components/FlexCol'
-import { NavigationContext, Pages } from '../../providers/navigation'
+import { NavigationContext } from '../../providers/navigation'
 import { NudgeContext } from '../../providers/nudge'
 import { AnnouncementContext } from '../../providers/announcements'
 import { WalletStaggerContainer, WalletStaggerChild } from '../../components/WalletLoadIn'
@@ -20,7 +20,8 @@ import HomeHeader from './HomeHeader'
 import PortfolioHero from './PortfolioHero'
 import HomeQuickActions from './HomeQuickActions'
 import AssetsSection, { useHomeAccountRows } from './AssetsSection'
-import ReceiveAssetSheet from './ReceiveAssetSheet'
+import AccountPickerSheet, { type AccountAction, useAccountAction } from './AccountPickerSheet'
+import { hasSpendable } from './accountSend'
 import PredictSection from './PredictSection'
 import RecentActivitySection from './RecentActivitySection'
 import ContactsSection from './ContactsSection'
@@ -29,15 +30,13 @@ import { usePortfolioBalanceDisplay } from '../../hooks/usePortfolioBalanceDispl
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { BackupContext } from '@/providers/backup'
 import { useTranslation } from '../../providers/language'
-import { FlowContext, emptyRecvInfo } from '../../providers/flow'
 
 export default function Wallet() {
   const { aspInfo } = useContext(AspContext)
   const { announcement } = useContext(AnnouncementContext)
   const { config } = useContext(ConfigContext)
   const { backupAndUpdateConfig } = useContext(BackupContext)
-  const { isInitialLoad, navigate } = useContext(NavigationContext)
-  const { setRecvInfo } = useContext(FlowContext)
+  const { isInitialLoad } = useContext(NavigationContext)
   const { nudge, nudgeCheckComplete } = useContext(NudgeContext)
   const { t } = useTranslation()
   const predictEnabled = getPredictConfig(aspInfo.network, aspInfo.url || undefined).enabled
@@ -118,13 +117,22 @@ export default function Wallet() {
 
   const contacts = useMemo(readContacts, [])
 
-  // Receive asks what is coming in once there is more than Bitcoin to choose
-  const accountRows = useHomeAccountRows()
-  const [receiveSheetOpen, setReceiveSheetOpen] = useState(false)
+  // Receive and Send ask which account first, once there is a choice to make:
+  // any account can receive, only one holding something can send
+  const { accountRows, portfolioRows } = useHomeAccountRows()
+  const sendableRows = accountRows.filter(hasSpendable)
+  const [picking, setPicking] = useState<AccountAction>()
+  const openAccount = useAccountAction()
+  const bitcoinRow = accountRows.find((row) => row.assetId === 'btc') ?? accountRows[0]
   const handleReceive = () => {
-    if (accountRows.length > 1) return setReceiveSheetOpen(true)
-    setRecvInfo(emptyRecvInfo)
-    navigate(Pages.ReceiveQRCode)
+    if (accountRows.length > 1) return setPicking('receive')
+    if (bitcoinRow) openAccount('receive', bitcoinRow, portfolioRows)
+  }
+  const handleSend = () => {
+    if (sendableRows.length > 1) return setPicking('send')
+    // one account to send from opens it; none still opens Send to scan or paste
+    const only = sendableRows[0] ?? bitcoinRow
+    if (only) openAccount('send', only, portfolioRows)
   }
 
   return (
@@ -142,7 +150,7 @@ export default function Wallet() {
             <PortfolioHero ref={balanceRef} collapseProgress={balanceCollapseProgress} />
           </WalletStaggerChild>
           <WalletStaggerChild animate={shouldStagger} className='home-stack__actions'>
-            <HomeQuickActions onReceive={handleReceive} />
+            <HomeQuickActions onReceive={handleReceive} onSend={handleSend} />
           </WalletStaggerChild>
           {hasHomeNotices ? (
             <WalletStaggerChild animate={shouldStagger}>
@@ -196,7 +204,12 @@ export default function Wallet() {
           </WalletStaggerChild>
         </WalletStaggerContainer>
       </Padded>
-      <ReceiveAssetSheet isOpen={receiveSheetOpen} rows={accountRows} onClose={() => setReceiveSheetOpen(false)} />
+      <AccountPickerSheet
+        action={picking}
+        rows={picking === 'send' ? sendableRows : accountRows}
+        portfolioRows={portfolioRows}
+        onClose={() => setPicking(undefined)}
+      />
     </Content>
   )
 }
